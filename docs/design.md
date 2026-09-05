@@ -1,8 +1,8 @@
 # Design
 
-## One conversation at each end
+## Existing conversations connected by messages
 
-The bridge moves selected messages between the existing owners of two conversations. It has no model credentials, inference client, or session-spawning API. A peer is a bridge identity for one attached conversation; it is not a replacement conversation.
+The bridge moves selected messages between existing conversations. One attachment can connect to several peers, including peers of the same provider. It has no model credentials, inference client, or session-spawning API. Goals and tasks remain in the clients; the bridge owns connections and message delivery. The [simplified plan](collaboration-v2.md) describes the next interface.
 
 ```mermaid
 flowchart LR

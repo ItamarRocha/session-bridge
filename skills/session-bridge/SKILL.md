@@ -28,6 +28,16 @@ Activate only after the user requests a connection. In a new Claude conversation
 
 If the claim is expired, canceled, already held, or closed by disconnection, stop processing that notification. Inspect uncertain work before any recovery: an expired claim does not establish that prior side effects did not happen.
 
+## Collaborate within the existing task
+
+Keep the user's goal, plan and pending peer dependency in the client's own task facilities when available, otherwise in the conversation. Do not require shared goal or work IDs across clients.
+
+- After delegating a bounded request, continue independent authorized work. After a substantive reply, incorporate it and resume the original task if unfinished.
+- For a handoff, state the remaining work and scope; retain responsibility until the peer explicitly accepts. If accepting before the final result is ready, send one informational `bridge_send` with `kind: "notice"`; reserve `bridge_reply` for the result.
+- For a review, name the commit or snapshot. Review only that revision; the author may continue independent work and must check whether findings still apply. Request another review at a meaningful checkpoint when needed.
+- Before yielding on unfinished work, preserve the next step or concrete dependency in native task state or the conversation. Use available native wait/continuation facilities within the user's scope. Do not create periodic “keep working” prompts or claim an idle client will wake without a supported delivery path.
+- Report completion or a blocker with evidence. Ordinary receipts and courtesy acknowledgements need no response. Discussing an approval does not resolve a native permission prompt; keep the host's permission rules in force.
+
 ## Control an exchange
 
 Use `bridge_status` for evidence, `bridge_cancel({messageId})` for one request, `bridge_disconnect({pairingId})` to close communication with a peer, and `bridge_detach` to close this attachment. Cancellation cannot undo completed work. A new pairing or follow-up request needs authorization within the user's task.

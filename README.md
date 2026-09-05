@@ -6,9 +6,9 @@ The bridge keeps a local message ledger and uses the clients' existing delivery 
 
 **Status:** private, early implementation for one user on one machine. The automated suite exercises the ledger, transports, and MCP with isolated test clients. Real model sessions have not yet been exercised for idle, busy, approval, or restart behavior. See [support and validation](docs/support.md) before relying on unattended delivery.
 
-**Next design:** [interactive collaboration document](docs/collaboration-v2.html) · [implementation plan](docs/collaboration-v2.md). Native session IDs, one-sided invitations, permission supervision, and durable goal ownership are proposed there. Explicit Claude activation is available now.
+**Simplified next design:** [visual plan](docs/collaboration-v2.html) · [implementation plan](docs/collaboration-v2.md) · [six-method interface](docs/plugin-methods.md). Connect existing sessions by native ID, exchange messages, and share a short status. Goals and tasks stay native; collaboration belongs in the shared skill. Explicit Claude activation is available now.
 
-The [multi-session method catalog](docs/plugin-methods.md) proposes connected-session lists, detailed status, separate discovery, and explicit operations for shared work. These method changes are not yet registered in the plugin. Current multi-peer behavior has been checked in an isolated ledger experiment; live multi-session delivery remains unverified.
+The six-method facade, native-ID connection and status updates are not yet registered in the plugin. There is no planned bridge-owned goal/work engine or automatic permission supervisor. Current multi-peer behavior has been checked in an isolated ledger experiment; live multi-session delivery remains unverified.
 
 ## Build
 
