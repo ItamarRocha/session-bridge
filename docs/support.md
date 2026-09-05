@@ -14,7 +14,7 @@ A successful queue command does not prove that the model observed a message. Che
 
 ## Claude Code
 
-Use an interactive CLI session with a personal plugin. Project-scope skills-directory plugins do not load monitors. `/reload-plugins` loads changed components and starts eligible monitors; disabling a plugin alone does not stop an already-running monitor. See the official [plugin reference](https://code.claude.com/docs/en/plugins-reference#skills-directory-plugins).
+Use an interactive CLI session with a personal plugin. Project-scope skills-directory plugins do not load monitors. `/reload-plugins` loads changed components; `/session-bridge:connect` explicitly starts the bridge's monitor. Disabling a plugin or changing its startup condition does not stop an already-running monitor. See the official [plugin reference](https://code.claude.com/docs/en/plugins-reference#skills-directory-plugins).
 
 The [Monitor tool](https://code.claude.com/docs/en/tools-reference#monitor-tool) is unavailable on Amazon Bedrock, Google Cloud's Agent Platform, Microsoft Foundry, and when `DISABLE_TELEMETRY` or `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set. Respect those host choices; this project does not switch flags or bypass availability checks. Plugin monitors are experimental and their behavior can change.
 

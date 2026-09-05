@@ -6,6 +6,8 @@ The bridge keeps a local message ledger and uses the clients' existing delivery 
 
 **Status:** private, early implementation for one user on one machine. The automated suite exercises the ledger, transports, and MCP with isolated test clients. Real model sessions have not yet been exercised for idle, busy, approval, or restart behavior. See [support and validation](docs/support.md) before relying on unattended delivery.
 
+**Next design:** [interactive collaboration document](docs/collaboration-v2.html) · [implementation plan](docs/collaboration-v2.md). Native session IDs, one-sided invitations, permission supervision, and durable goal ownership are proposed there. Explicit Claude activation is available now.
+
 ## Build
 
 Requires Node.js 24+, npm, Codex with `codex queue`, and interactive Claude Code with plugin monitors available. Both clients must run as the same OS user and use the same bridge data directory. Data defaults to `~/.local/state/session-bridge`; use `SESSION_BRIDGE_HOME` or CLI `--home /absolute/path` to select another private local directory. Apply the same choice to both clients and every bridge helper.
@@ -34,13 +36,9 @@ ln -s "$bridge_project" "$HOME/.claude/skills/session-bridge"
 
 This command deliberately fails if that destination already exists. Inspect an existing installation before updating it. It does not replace a plugin or edit project settings.
 
-In the **existing Claude session**, run `/reload-plugins`. The plugin monitor posts a private attachment ticket into that conversation. Ask Claude:
+In the **existing Claude session**, run `/reload-plugins` to load the plugin, then explicitly run `/session-bridge:connect` when you want to activate the bridge. Opening another Claude terminal leaves its bridge dormant. The connect command starts the monitor and posts a private attachment ticket into that conversation. Claude uses that ticket with `bridge_attach` and returns an `sb_...` ID. Share that ID with Codex. The attachment ticket stays in the Claude conversation; it is not the pairing code.
 
-> Use the session-bridge skill. Attach this session using its monitor ticket and give me its shareable peer ID.
-
-Claude calls `bridge_attach` and returns an `sb_...` ID. Share that ID with Codex. The attachment ticket stays in the Claude conversation; it is not the pairing code.
-
-Personal plugin loading and monitor startup on reload are documented by [Claude Code](https://code.claude.com/docs/en/plugins-reference#monitors). Monitor availability varies by host and configuration; [the support guide](docs/support.md#claude-code) lists the constraints. If no monitor notification arrives, inspect the plugin errors and task panel before trying to attach.
+Personal plugin loading and monitors triggered by skill invocation are documented by [Claude Code](https://code.claude.com/docs/en/plugins-reference#monitors). Monitor availability varies by host and configuration; [the support guide](docs/support.md#claude-code) lists the constraints. If no notification arrives after the connect command, inspect the plugin errors and task panel before trying to attach. Monitors already running from an older installation remain running until explicitly stopped or the session exits.
 
 ### 2. Attach the open Codex task
 
