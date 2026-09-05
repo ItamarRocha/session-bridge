@@ -1,0 +1,51 @@
+.claude-plugin/plugin.json
+  s_e715395fcc9d04::t_b745125c32e111 1-16
+.codex-plugin/plugin.json
+  s_e715395fcc9d04::t_0c74945b6804c3 1-38
+.gitignore
+  s_4ffc2d836b873d::t_8631e5677bee55 1-8
+README.md
+  s_e715395fcc9d04::t_d2d528ad4a6824 1-121
+claude.mcp.json
+  s_e715395fcc9d04::t_8e0754c1a61c49 1-13
+docs/support.md
+  s_e715395fcc9d04::t_7767b92c977e75 1-59
+monitors/monitors.json
+  s_e715395fcc9d04::t_46db8997f87562 1-8
+package-lock.json
+  s_e715395fcc9d04::t_ac77ecbda909dd 1-2124
+src/doctor.ts
+  s_e715395fcc9d04::t_c5514d649588fb 1-33
+src/paths.ts
+  s_4ffc2d836b873d::t_45fba22c0da751 1-27
+test/store.test.ts
+  s_e715395fcc9d04::t_cefc22f8fca568 1-321
+tsconfig.build.json
+  s_4ffc2d836b873d::t_3a56be27e6180f 1-5
+tsconfig.json
+  s_4ffc2d836b873d::t_5e11c6788be833 1-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "d6750d7d4f1e36f559d10c936edf8b54bda62f29",
+  "prompts": {},
+  "sessions": {
+    "s_4ffc2d836b873d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a059d8-1f90-7dc1-8777-8216d61f6cdd",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Itamar Rocha Filho <itamardprf@gmail.com>"
+    },
+    "s_e715395fcc9d04": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07056-03b8-77b1-864a-470e8dcece14",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Itamar Rocha Filho <itamardprf@gmail.com>"
+    }
+  }
+}
