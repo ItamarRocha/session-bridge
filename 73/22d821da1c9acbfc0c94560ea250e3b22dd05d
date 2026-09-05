@@ -1,0 +1,19 @@
+docs/collaboration-v2.html
+  s_e715395fcc9d04::t_b2814decfd9d63 12-13,18,20,23-43,58,61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "7322d821da1c9acbfc0c94560ea250e3b22dd05d",
+  "prompts": {},
+  "sessions": {
+    "s_e715395fcc9d04": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07056-03b8-77b1-864a-470e8dcece14",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Itamar Rocha Filho <itamardprf@gmail.com>"
+    }
+  }
+}
