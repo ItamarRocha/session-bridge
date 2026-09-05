@@ -1,12 +1,14 @@
 # Session Bridge
 
-Connect a Codex task and a Claude Code session that are already running. Share a peer ID, pair them, send a bounded request, and get a reply in the original conversation.
+Connect Codex and Claude Code sessions that are already running. A session can pair with multiple peers, including peers of the same provider. Share peer IDs, send bounded requests to selected peers, and get replies in the original conversations.
 
 The bridge keeps a local message ledger and uses the clients' existing delivery mechanisms: Codex's `queue` command and Claude Code's plugin monitors. It does not launch or resume model sessions. Small MCP and monitor helpers run alongside your clients; Codex delivery uses a brief CLI helper. Model authentication and usage remain with the official clients.
 
 **Status:** private, early implementation for one user on one machine. The automated suite exercises the ledger, transports, and MCP with isolated test clients. Real model sessions have not yet been exercised for idle, busy, approval, or restart behavior. See [support and validation](docs/support.md) before relying on unattended delivery.
 
 **Next design:** [interactive collaboration document](docs/collaboration-v2.html) · [implementation plan](docs/collaboration-v2.md). Native session IDs, one-sided invitations, permission supervision, and durable goal ownership are proposed there. Explicit Claude activation is available now.
+
+The [multi-session method catalog](docs/plugin-methods.md) proposes connected-session lists, detailed status, separate discovery, and explicit operations for shared work. These method changes are not yet registered in the plugin. Current multi-peer behavior has been checked in an isolated ledger experiment; live multi-session delivery remains unverified.
 
 ## Build
 

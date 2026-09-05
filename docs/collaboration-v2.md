@@ -2,7 +2,11 @@
 
 Design proposal · 2026-09-05 · [Interactive document](collaboration-v2.html)
 
+Extension: [multiple sessions and the proposed plugin method catalog](plugin-methods.md).
+
 **Decision:** keep the existing local message transport and add a durable collaboration contract above it. Users connect existing conversations by their native IDs. Each goal has a coordinator, owned work, acceptance criteria, and a recorded next action. An agent finishing its response is not a goal completing.
+
+The model supports more than two participants: sessions form explicit pairwise connections, and each goal names its own participants and roles. A session may belong to several goals. Completing one goal does not detach it from the others. The current ledger already permits multiple connections and both same-provider combinations; native multi-session execution still needs a live test.
 
 **Implementation status:** this revision changes Claude's monitor from automatic startup to explicit `/session-bridge:connect` activation. Native-ID connections, recipient bootstrap, permission supervision, and goal orchestration below are proposed, not implemented. The existing release still uses `sb_...` peer IDs and bounded request/reply exchanges. This document is a build plan, not evidence of a completed live collaboration test.
 
@@ -178,7 +182,7 @@ Retain `Bridge`, `Store`, and the delivery adapters. Add a collaboration module 
 | `src/doctor.ts` | Report native queue support, receiver activation, identity freshness, observed reachability with source/time or unknown, hook support and unresolved work. |
 | `skills/session-bridge/SKILL.md`, new receive/review guidance | End-of-turn responsibility contract, native-ID usage and acceptance criteria; recipient acceptance separate from the manual activation skill. |
 
-Suggested public operations are `connect`, `status`, `goal.create`, `work.claim`, `work.checkpoint`, `work.submit`, `work.accept`, `handoff.offer/accept`, `review.submit`, `permission.resolve`, `pause`, `resume`, and `cancel`. Keep tool discovery compact; group related work transitions behind one schema where that improves usability. Do not publish an unimplemented API as if it exists.
+The [method catalog](plugin-methods.md) defines explicit session, message, goal, work, handoff, review and permission operations. Start with `bridge_sessions_list`, `bridge_session_get`, and a separate `bridge_sessions_discover`: connected peers, detailed status, and discovery are different questions. Keep consequential transitions clearly named rather than placing them behind a universal action switch. Publish only implemented methods, and update skills and CLI help alongside a deliberate interface revision.
 
 Store required work dependencies and exact reviewed artifact revisions, not complete mirrored client transcripts. Keep original native IDs stable across restart and preserve message history. A session's new generation invalidates old transport/approval capabilities but does not discard its goal history. Migration must never reopen cancelled messages or silently migrate old pairing authority into supervision grants.
 
@@ -187,7 +191,7 @@ Store required work dependencies and exact reviewed artifact revisions, not comp
 | Phase | Deliverable | Acceptance evidence |
 | --- | --- | --- |
 | 0 — activation | Manual connect skill and on-invocation monitor. | Plugin validation; a fresh Claude terminal emits no bridge setup until the user invokes connect. Configuration validation is complete; live-terminal behavior remains to be observed. |
-| 1 — native identity + invitation | Native addresses, generation binding, one-sided Claude → Codex bootstrap, honest capability status. | Paste one Codex UUID from Claude; the same existing Codex task acknowledges and replies without a second user setup step. Busy, paused, offline, duplicate invitation, `/clear` and resume cases behave correctly. |
+| 1 — session reads + native invitation | Connected-session lists and detailed status first, followed by native addresses, generation binding and one-sided Claude → Codex bootstrap. | Lists never enroll or wake a peer and expose unknown activity honestly. Paste one Codex UUID from Claude; the same existing Codex task acknowledges and replies without a second user setup step. Multiple edges, busy, paused, offline, duplicate invitation, `/clear` and resume cases behave correctly. |
 | 2 — permission supervision | Scoped grant and direct hook rendezvous, human fallback. | Harmless prompted action resolves once through Codex; another action outside scope goes to the user. Expired/revoked/replayed decisions, mismatched arguments, missing supervisor and unsupported prompt tests pass. No new model session starts. |
 | 3 — durable collaboration | Goals, owned work, dependencies, acceptance and transactional outbox. | Delegation and parallel experiments survive turn endings and helper restart; no active goal loses its next action. Completion requires recorded evidence. |
 | 4 — handoff + live review | Atomic ownership transfer, snapshot review, checkpoint subscriptions. | Lost ACK does not duplicate ownership; stale owner/result and review of old revision cannot pass acceptance; both-waiting deadlock produces one actionable recovery. |
