@@ -1,0 +1,8 @@
+[
+  {
+    "name": "session-bridge-inbox",
+    "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/cli.js\" monitor",
+    "description": "Receives requests from explicitly paired local coding sessions",
+    "when": "always"
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "name": "@itamarrocha/session-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pair existing Codex and Claude Code sessions through supported local interfaces.",
+  "license": "UNLICENSED",
+  "engines": {"node": ">=24.0.0"},
+  "bin": {"session-bridge": "dist/cli.js"},
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit",
+    "pretest": "npm run build",
+    "test": "node --import tsx --test test/*.test.ts",
+    "verify": "npm run check && npm test"
+  },
+  "dependencies": {"@modelcontextprotocol/sdk": "1.30.0", "zod": "4.5.4"},
+  "devDependencies": {"@types/node": "^24.0.0", "tsx": "^4.0.0", "typescript": "7.0.2"}
+}

@@ -1,0 +1,38 @@
+{
+  "name": "session-bridge",
+  "version": "0.1.0",
+  "description": "Pair existing Codex and Claude Code sessions for bounded request and reply.",
+  "author": {
+    "name": "Itamar Rocha",
+    "url": "https://github.com/ItamarRocha"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Session Bridge",
+    "shortDescription": "Connect your running coding sessions.",
+    "longDescription": "Pair local Codex and Claude Code sessions, send bounded requests, and track replies with explicit receipts.",
+    "developerName": "Itamar Rocha",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Connect this session to another coding session."
+    ]
+  },
+  "mcpServers": {
+    "session-bridge": {
+      "command": "node",
+      "args": [
+        "dist/cli.js",
+        "mcp",
+        "--host",
+        "codex"
+      ],
+      "cwd": "."
+    }
+  },
+  "repository": "https://github.com/ItamarRocha/session-bridge",
+  "license": "UNLICENSED"
+}
