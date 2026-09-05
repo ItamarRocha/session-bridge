@@ -19,7 +19,7 @@ const message: Message = {
 };
 
 async function scratch(t: {after(fn: () => Promise<void>): void}): Promise<string> {
-  const dir = await mkdtemp('/private/tmp/sb-transport-');
+  const dir = await mkdtemp('/tmp/sb-transport-');
   t.after(() => rm(dir, {recursive: true, force: true}));
   return dir;
 }
