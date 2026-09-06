@@ -1,0 +1,29 @@
+LICENSE
+  s_e715395fcc9d04::t_e2805ae77be97b 1-21
+.codex-plugin/plugin.json
+  s_e715395fcc9d04::t_e2805ae77be97b 37
+.claude-plugin/plugin.json
+  s_e715395fcc9d04::t_e2805ae77be97b 10
+package.json
+  s_e715395fcc9d04::t_e2805ae77be97b 7
+README.md
+  s_e715395fcc9d04::t_e2805ae77be97b 120-122
+package-lock.json
+  s_e715395fcc9d04::t_b6a2a83f33428c 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "0fb69327ebc297fa36c5894e039c26311f2d8660",
+  "prompts": {},
+  "sessions": {
+    "s_e715395fcc9d04": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07056-03b8-77b1-864a-470e8dcece14",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Itamar Rocha Filho <itamardprf@gmail.com>"
+    }
+  }
+}
