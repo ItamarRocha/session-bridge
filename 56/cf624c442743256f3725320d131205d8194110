@@ -1,0 +1,25 @@
+README.md
+  s_e715395fcc9d04::t_9507ebfe2dd894 7
+docs/collaboration-v2.html
+  s_e715395fcc9d04::t_99c30166b112b4 22
+docs/evidence/claude-codex-roundtrip-v030-2026-09-05.json
+  s_e715395fcc9d04::t_a4da80cb287728 1-41
+docs/live-validation.md
+  s_e715395fcc9d04::t_6a6cd2085815fd 3,7,37,39,60,66,69-87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "56cf624c442743256f3725320d131205d8194110",
+  "prompts": {},
+  "sessions": {
+    "s_e715395fcc9d04": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07056-03b8-77b1-864a-470e8dcece14",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Itamar Rocha Filho <itamardprf@gmail.com>"
+    }
+  }
+}
