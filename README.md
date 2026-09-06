@@ -31,6 +31,8 @@ node dist/cli.js doctor
 
 Keep this checkout in a durable location. The plugin needs the locally built `dist/cli.js` and installed `node_modules`; rebuild after updating source. Building does not change client configuration.
 
+Codex delivery inherits the launching environment's `CODEX_HOME` by default. If Claude runs under a different Codex account profile from the destination, set `SESSION_BRIDGE_CODEX_HOME` to the destination's absolute Codex home path when launching Claude or its bridge helper. This override affects the child Codex command only; it does not change Claude's environment or another client's settings. `doctor` checks Codex through that same child environment. `CODEX_SQLITE_HOME` or `sqlite_home` configuration can select a different queue directory; see [Codex profile routing](docs/support.md#codex-profile-routing). A successful submission to another profile's queue does not establish receipt.
+
 ## Connect from an existing Claude session
 
 From the built checkout, install the personal Claude plugin:

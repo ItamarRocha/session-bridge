@@ -90,6 +90,31 @@ test('a missing or non-executable Codex stays stored, and invalid identity never
   await assert.rejects(lstat(capture), {code: 'ENOENT'});
 });
 
+test('a bridge home override directs only the Codex child to the selected profile', async (t) => {
+  const dir = await scratch(t);
+  const capture = join(dir, 'environment.json');
+  const command = await fakeCodex(dir, `require('node:fs').writeFileSync(process.env.TEST_CAPTURE, JSON.stringify({home: process.env.CODEX_HOME, sqlite: process.env.CODEX_SQLITE_HOME, marker: process.env.TEST_MARKER}));`);
+  const base = {...process.env, CODEX_HOME: '/inherited/account home', CODEX_SQLITE_HOME: '/explicit/sqlite', TEST_CAPTURE: capture, TEST_MARKER: 'preserved', SESSION_BRIDGE_CODEX_HOME: undefined};
+  assert.equal((await deliverCodex(peer, message, {command, env: base})).state, 'submitted');
+  assert.equal(JSON.parse(await readFile(capture, 'utf8')).home, '/inherited/account home');
+  const overridden = {...base, SESSION_BRIDGE_CODEX_HOME: '/selected/codex home'};
+  assert.equal((await deliverCodex(peer, message, {command, env: overridden})).state, 'submitted');
+  assert.deepEqual(JSON.parse(await readFile(capture, 'utf8')), {home: '/selected/codex home', sqlite: '/explicit/sqlite', marker: 'preserved'});
+  assert.equal(overridden.CODEX_HOME, '/inherited/account home');
+});
+
+test('an invalid explicit Codex home never dispatches into the inherited profile', async (t) => {
+  const dir = await scratch(t);
+  const capture = join(dir, 'should-not-exist');
+  const command = await fakeCodex(dir, `require('node:fs').writeFileSync(process.env.TEST_CAPTURE, 'launched');`);
+  for (const home of ['relative/home', '', '/invalid\0home']) {
+    const result = await deliverCodex(peer, message, {command, env: {...process.env, TEST_CAPTURE: capture, SESSION_BRIDGE_CODEX_HOME: home}});
+    assert.equal(result.state, 'stored');
+    assert.match(result.detail, /SESSION_BRIDGE_CODEX_HOME/);
+    await assert.rejects(lstat(capture), {code: 'ENOENT'});
+  }
+});
+
 test('Codex failures after launch remain unknown and do not expose process output', async (t) => {
   const dir = await scratch(t);
   const command = await fakeCodex(dir, `process.stderr.write('secret-token-from-cli'); process.exit(9);`);

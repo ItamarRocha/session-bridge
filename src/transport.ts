@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DeliveryResult, Message, Peer } from './types.js';
 import { defaultHome } from './paths.js';
+import { codexEnvironment } from './codex-environment.js';
 
 const MAX_FRAME_BYTES = 4096;
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;
@@ -60,6 +61,12 @@ export async function deliverCodex(
   if (!validTimeout(timeoutMs) || !ID.test(message.id) || !ID.test(message.to)) {
     return {state: 'stored', detail: 'Invalid dispatch parameters; no process was launched.'};
   }
+  let env: NodeJS.ProcessEnv;
+  try {
+    env = codexEnvironment(options.env).env;
+  } catch (error) {
+    return {state: 'stored', detail: error instanceof Error ? error.message : 'Invalid Codex home configuration; no queue command was launched.'};
+  }
   return new Promise((resolve) => {
     let finished = false;
     let launched = false;
@@ -74,7 +81,7 @@ export async function deliverCodex(
     try {
       const child = spawn(options.command ?? 'codex', [
         'queue', '--thread', nativeSessionId, '--message', messageNotice(message, options.home, peer),
-      ], {shell: false, stdio: 'ignore', env: options.env ?? process.env, windowsHide: true});
+      ], {shell: false, stdio: 'ignore', env, windowsHide: true});
       child.once('spawn', () => { launched = true; });
       child.once('error', (error) => {
         const code = codeOf(error);

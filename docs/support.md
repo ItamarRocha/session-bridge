@@ -14,6 +14,30 @@ The packaged Codex MCP configuration sets `cwd` to `.`. The published [plugin MC
 
 A successful queue command proves submission only. Inspect the receiving session's receipt and substantive reply to establish that its agent acted. There is no promised wake-up latency.
 
+### Codex profile routing
+
+The Codex child command preserves inherited `CODEX_HOME` unless `SESSION_BRIDGE_CODEX_HOME` explicitly selects another absolute path. A terminal launched through an account manager can inherit a Codex home different from the destination desktop task's home. Both profiles can contain the same native task ID, so the CLI can accept a message into the other profile's queue while the intended task receives nothing.
+
+Use the destination client's actual Codex home. For a session-scoped override, launch Claude from the built checkout with:
+
+```bash
+SESSION_BRIDGE_CODEX_HOME=/absolute/path/to/destination-codex-home \
+  claude --plugin-dir "$PWD"
+```
+
+Set the same `SESSION_BRIDGE_HOME` as the other participants if the test uses an isolated bridge ledger. The Codex home override changes only the environment passed to child Codex commands; it does not mutate the parent process environment, rewrite client configuration, or move an already queued item. Existing deliberate `CODEX_HOME` profiles remain in effect when the override is absent. An existing helper needs to be relaunched with the changed environment before it can use that override.
+
+Run doctor from the helper's launch environment to inspect the selected route:
+
+```bash
+SESSION_BRIDGE_CODEX_HOME=/absolute/path/to/destination-codex-home \
+  node dist/cli.js doctor
+```
+
+Doctor invokes Codex with the same child environment used for delivery. Its reported Codex home identifies the selected profile, not proof of the destination's effective queue directory. Published Codex resolves queue storage as `sqlite_home` configuration, otherwise `CODEX_SQLITE_HOME`, otherwise its Codex home, then appends `queue_1.sqlite`. An explicit SQLite setting remains honored even when `SESSION_BRIDGE_CODEX_HOME` changes the profile. [Configuration precedence](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/core/src/config/mod.rs#L3953), [queue database path](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/state/src/sqlite.rs#L154)
+
+If delivery remains `submitted`, inspect the exact message's bridge receipt and compare the sender helper's selected Codex profile with the owning task's profile and SQLite settings. Then check the intended task's native queue, loaded state and permission or pause state. Do not automatically resend: the original notification may still be queued in another profile. Correcting routing alone does not prove that the original request moved or arrived.
+
 ## Claude Code
 
 Install the built checkout as a personal plugin and run `/reload-plugins` in the intended conversation. `/session-bridge:connect` is the explicit activation command. It starts Claude's native `Monitor` tool with `monitor --session-id "${CLAUDE_SESSION_ID}"`; no automatically declared plugin monitor starts on terminal creation. A regular background Bash process cannot replace native model notifications. [Monitor tool](https://code.claude.com/docs/en/tools-reference#monitor-tool), [skill substitutions](https://code.claude.com/docs/en/skills#available-string-substitutions)
@@ -36,7 +60,8 @@ An existing receiver from an older installation does not disappear when configur
 | New Claude conversation sees an old identity | Confirm the current plugin hook is loaded; missing fresh context must fail. Reactivate after `/clear`. |
 | Unknown bare UUID gives `activation_required` | Use `codex:UUID` for an unregistered Codex destination, or explicitly activate the selected Claude receiver. |
 | Connect returns `pending` | Connection is saved; connect itself sends nothing. The first message can notify the Codex target, and its eligible targeted read binds it. |
-| Codex stays at `submitted` | Inspect the exact owning task, native queue, and its pause or permission state. |
+| Codex stays at `submitted` | Inspect the exact message's receipt; compare the helper's Codex home and SQLite settings with the owning task, then inspect its native queue, loaded state, and pause or permission state. |
+| Claude inherits another Codex account profile | Set an absolute `SESSION_BRIDGE_CODEX_HOME` for the intended destination and relaunch the helper. Inspect the original queued message before any new send. |
 | CLI can store a message but cannot queue it | Check the task shell's permission to access native Codex queue storage. |
 | Delivery is `unknown` | Inspect destination and ledger before considering a new request. No automatic resend occurs. |
 | History says `previouslyRead` or names a reply | Inspect prior work and existing result before repeating actions. |
