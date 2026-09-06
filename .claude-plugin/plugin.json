@@ -7,7 +7,7 @@
     "url": "https://github.com/ItamarRocha"
   },
   "repository": "https://github.com/ItamarRocha/session-bridge",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "skills": "./skills/",
   "mcpServers": "./claude.mcp.json",
   "hooks": "./hooks/hooks.json"

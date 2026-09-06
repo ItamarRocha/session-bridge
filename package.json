@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Connect running Codex and Claude Code sessions through supported local interfaces.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "engines": {
     "node": ">=24.0.0"
   },
