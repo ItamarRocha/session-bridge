@@ -1,0 +1,45 @@
+test/store.test.ts
+  s_e715395fcc9d04::t_328d5e7dccb27a 9
+README.md
+  s_e715395fcc9d04::t_328d5e7dccb27a 3,5,7,9-15,17,19,21-25,28,31,35,37,41-47,50,53,56,58,60,63,66,68,70,72-73,76,78,80-87,89,91,93-95,98-100,102,104,106-114,116,118,120
+.claude-plugin/plugin.json
+  s_e715395fcc9d04::t_c9d4dfcc050ba1 4
+.codex-plugin/plugin.json
+  s_e715395fcc9d04::t_8ef4ff36698f1f 4
+.gitignore
+  s_e715395fcc9d04::t_d301001b39aac2 1
+CONTRIBUTING.md
+  s_e715395fcc9d04::t_d2cfe75d25d791 1-48
+docs/architecture.md
+  s_e715395fcc9d04::t_552c0ab2e1a8d2 5,33
+docs/collaboration.html
+  s_e715395fcc9d04::t_5b696e9b743b9c 17,22-23,25
+docs/collaboration.md
+  s_e715395fcc9d04::t_4ad695ce15ae22 1-76
+docs/getting-started.md
+  s_e715395fcc9d04::t_f142b39953f59c 1-142
+docs/methods.md
+  s_e715395fcc9d04::t_34ddc638a18220 3
+docs/support.md
+  s_e715395fcc9d04::t_08864be7b01dea 1,3,65,110,112
+docs/validation.md
+  s_e715395fcc9d04::t_7f2a898a3a2646 1-52
+package.json
+  s_e715395fcc9d04::t_15b79b1b9ddec0 6,29-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "47610f4641d286ef35dbedfaf9f603e7a24ceeec",
+  "prompts": {},
+  "sessions": {
+    "s_e715395fcc9d04": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07056-03b8-77b1-864a-470e8dcece14",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Itamar Rocha Filho <itamardprf@gmail.com>"
+    }
+  }
+}
