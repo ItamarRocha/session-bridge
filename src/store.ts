@@ -5,11 +5,11 @@ import {
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type {
-  Claim, DeliveryResult, Host, Message, Pairing, Peer, SendInput, StoreContract,
+  Claim, ConnectedPeer, DeliveryResult, Host, Message, Pairing, Peer, SendInput, StoreContract,
 } from './types.js';
 
 type Row = Record<string, unknown>;
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_BODY_BYTES = 32 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -68,6 +68,9 @@ function peerRow(row: Row): Peer {
     nativeSessionId: row.native_session_id as string | null,
     endpoint: row.endpoint as string | null,
     createdAt: Number(row.created_at), closedAt: row.closed_at as number | null,
+    attachedAt: row.attached_at as number | null,
+    statusText: row.status_text as string | null,
+    statusUpdatedAt: row.status_updated_at as number | null,
   };
 }
 
@@ -105,7 +108,7 @@ export class Store implements StoreContract {
       this.db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;');
       this.transaction(() => {
         const version = Number(this.db.prepare('PRAGMA user_version').get()!.user_version);
-        if (version !== 0 && version !== SCHEMA_VERSION) throw new Error(`Unsupported store schema version: ${version}`);
+        if (version < 0 || version > SCHEMA_VERSION) throw new Error(`Unsupported store schema version: ${version}`);
         if (version === 0) {
           this.db.exec(`
             CREATE TABLE peers (
@@ -131,10 +134,17 @@ export class Store implements StoreContract {
               UNIQUE(from_peer,idempotency_key), CHECK (from_peer <> to_peer)
             );
             CREATE INDEX inbox ON messages(to_peer,acknowledged_at,created_at);
+          `);
+        }
+        if (version < 2) {
+          this.db.exec(`
+            ALTER TABLE peers ADD COLUMN status_text TEXT;
+            ALTER TABLE peers ADD COLUMN status_updated_at INTEGER;
             PRAGMA user_version=${SCHEMA_VERSION};
           `);
         }
         this.db.exec(`
+          CREATE INDEX IF NOT EXISTS peer_native_identity ON peers(native_session_id COLLATE NOCASE,host) WHERE closed_at IS NULL;
           CREATE INDEX IF NOT EXISTS message_history_from ON messages(from_peer,created_at DESC,id DESC);
           CREATE INDEX IF NOT EXISTS message_history_to ON messages(to_peer,created_at DESC,id DESC);
         `);
@@ -193,17 +203,53 @@ export class Store implements StoreContract {
     if (input.host === 'codex' && (!input.nativeSessionId || !UUID.test(input.nativeSessionId))) {
       throw new Error('Codex native session ID must be a UUID');
     }
-    if (input.nativeSessionId !== undefined) text(input.nativeSessionId, 'Native session ID', 256);
+    if (input.nativeSessionId !== undefined && !UUID.test(input.nativeSessionId)) {
+      throw new Error('Native session ID must be a UUID');
+    }
     if (input.endpoint !== undefined) text(input.endpoint, 'Endpoint', 1024);
     const id = `sb_${randomUUID()}`;
     const ticket = `sbt_${randomBytes(32).toString('base64url')}`;
     const peer = this.transaction(() => {
+      if (input.nativeSessionId && this.findNativePeer(input.nativeSessionId, input.host)) {
+        throw new Error('Native session already has an active peer; reuse it or close it before registering again');
+      }
       this.db.prepare(`INSERT INTO peers(id,host,label,native_session_id,endpoint,created_at,ticket_hash)
-        VALUES(?,?,?,?,?,?,?)`).run(id, input.host, input.label, input.nativeSessionId ?? null,
+        VALUES(?,?,?,?,?,?,?)`).run(id, input.host, input.label, input.nativeSessionId?.toLowerCase() ?? null,
         input.endpoint ?? null, this.now(), hash(ticket));
       return this.peer(id);
     });
     return { peer, ticket };
+  }
+
+  ensureCodexPeer(input: {nativeSessionId: string; label?: string; attach?: boolean}): Peer {
+    const label = input.label ?? 'Codex';
+    text(label, 'Label', 128);
+    if (!UUID.test(input.nativeSessionId)) throw new Error('Codex native session ID must be a UUID');
+    return this.transaction(() => {
+      const previous = this.findNativePeer(input.nativeSessionId, 'codex');
+      if (previous) {
+        if (input.attach !== false && previous.attachedAt === null) {
+          this.db.prepare('UPDATE peers SET attached_at=?,ticket_hash=NULL WHERE id=?').run(this.now(), previous.id);
+          return this.peer(previous.id);
+        }
+        return previous;
+      }
+      const id = `sb_${randomUUID()}`;
+      const now = this.now();
+      this.db.prepare(`INSERT INTO peers(id,host,label,native_session_id,created_at,attached_at)
+        VALUES(?,'codex',?,?,?,?)`).run(id, label, input.nativeSessionId.toLowerCase(), now, input.attach === false ? null : now);
+      return this.peer(id);
+    });
+  }
+
+  findNativePeer(nativeSessionId: string, host?: Host): Peer | null {
+    if (!UUID.test(nativeSessionId)) throw new Error('Native session ID must be a UUID');
+    if (host !== undefined && host !== 'codex' && host !== 'claude') throw new Error('Host must be codex or claude');
+    const rows = host === undefined
+      ? this.db.prepare('SELECT * FROM peers WHERE native_session_id=? COLLATE NOCASE AND closed_at IS NULL').all(nativeSessionId)
+      : this.db.prepare('SELECT * FROM peers WHERE native_session_id=? COLLATE NOCASE AND host=? AND closed_at IS NULL').all(nativeSessionId, host);
+    if (rows.length > 1) throw new Error('Native session ID is ambiguous; specify its provider or close duplicate registrations');
+    return rows[0] ? peerRow(rows[0]) : null;
   }
 
   attach(ticket: string): Peer {
@@ -212,7 +258,7 @@ export class Store implements StoreContract {
       const row = this.db.prepare('SELECT * FROM peers WHERE ticket_hash=? AND attached_at IS NULL AND closed_at IS NULL').get(hash(ticket));
       if (!row) throw new Error('Invalid or already used attach ticket');
       this.db.prepare('UPDATE peers SET attached_at=?,ticket_hash=NULL WHERE id=?').run(this.now(), String(row.id));
-      return peerRow(row);
+      return this.peer(String(row.id));
     });
   }
 
@@ -224,6 +270,30 @@ export class Store implements StoreContract {
 
   peers(): Peer[] {
     return this.db.prepare('SELECT * FROM peers WHERE closed_at IS NULL ORDER BY created_at,id').all().map(peerRow);
+  }
+
+  connectedPeers(self: string): ConnectedPeer[] {
+    this.activePeer(self);
+    return this.db.prepare(`SELECT peer.*, pair.id AS pair_id, pair.a AS pair_a, pair.b AS pair_b,
+      pair.created_at AS pair_created_at FROM pairings pair
+      JOIN peers peer ON peer.id=CASE WHEN pair.a=? THEN pair.b ELSE pair.a END
+      WHERE (pair.a=? OR pair.b=?) AND pair.closed_at IS NULL AND peer.closed_at IS NULL
+      ORDER BY pair.created_at,pair.id`).all(self, self, self).map((row) => ({
+        peer: peerRow(row),
+        pairing: { id: String(row.pair_id), a: String(row.pair_a), b: String(row.pair_b),
+          createdAt: Number(row.pair_created_at), closedAt: null },
+      }));
+  }
+
+  updateStatus(self: string, status: string): Peer {
+    text(status, 'Status', 512);
+    if (/[\r\n\u0085\u2028\u2029]/.test(status)) throw new Error('Status must be a single line');
+    return this.transaction(() => {
+      this.activePeer(self);
+      this.db.prepare('UPDATE peers SET status_text=?,status_updated_at=? WHERE id=?')
+        .run(status.trim(), this.now(), self);
+      return this.peer(self);
+    });
   }
 
   setEndpoint(id: string, endpoint: string | null): void {
@@ -316,6 +386,11 @@ export class Store implements StoreContract {
       AND p.closed_at IS NULL AND sender.closed_at IS NULL ORDER BY m.created_at,m.id`).all(self, this.now()).map(messageRow);
   }
 
+  incoming(self: string): Message[] {
+    this.activePeer(self);
+    return this.db.prepare('SELECT * FROM messages WHERE to_peer=? ORDER BY created_at,id').all(self).map(messageRow);
+  }
+
   history(self: string, limit = 100): Message[] {
     this.peer(self);
     seconds(limit, 'History limit', 100);
@@ -345,25 +420,41 @@ export class Store implements StoreContract {
     });
   }
 
-  reply(self: string, id: string, claimId: string, body: string): Message {
+  reply(self: string, id: string, claimId: string, body: string, idempotencyKey?: string): Message {
     text(body, 'Body', MAX_BODY_BYTES);
+    if (idempotencyKey !== undefined) text(idempotencyKey, 'Idempotency key', 256);
     return this.transaction(() => {
       const original = this.rawMessage(id);
       if (original.to !== self) throw new Error('Only the recipient can reply');
       this.activePair(original.pairingId);
       if (original.kind !== 'request') throw new Error('Only a request accepts a reply');
       if (!original.claimId || original.claimId !== claimId) throw new Error('A valid claim is required to reply');
+      const fingerprint = hash(JSON.stringify([original.from, body, 'reply', id]));
+      if (idempotencyKey !== undefined) {
+        const previous = this.db.prepare('SELECT * FROM messages WHERE from_peer=? AND idempotency_key=?').get(self, idempotencyKey);
+        if (previous) {
+          if (previous.input_hash !== fingerprint) throw new Error('Idempotency key was used with different message input');
+          return messageRow(previous);
+        }
+      }
       if (original.answeredBy) {
         const previous = this.rawMessage(original.answeredBy);
         if (previous.body !== body) throw new Error('Request already has a different reply');
+        if (idempotencyKey !== undefined) {
+          const row = this.db.prepare('SELECT idempotency_key FROM messages WHERE id=?').get(previous.id)!;
+          if (row.idempotency_key !== null) throw new Error('Request already has a reply with a different idempotency key');
+          this.db.prepare('UPDATE messages SET idempotency_key=?,input_hash=? WHERE id=?')
+            .run(idempotencyKey, fingerprint, previous.id);
+        }
         return previous;
       }
       this.eligible(original);
       if (original.claimExpiresAt! <= this.now()) throw new Error('Claim lease expired; reply is no longer accepted');
       const replyId = `msg_${randomUUID()}`;
       const now = this.now();
-      this.db.prepare(`INSERT INTO messages(id,pairing_id,from_peer,to_peer,kind,body,reply_to,created_at,expires_at)
-        VALUES(?,?,?,?,?,?,?,?,?)`).run(replyId, original.pairingId, self, original.from, 'reply', body, id, now, original.expiresAt);
+      this.db.prepare(`INSERT INTO messages(id,pairing_id,from_peer,to_peer,kind,body,reply_to,created_at,expires_at,idempotency_key,input_hash)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(replyId, original.pairingId, self, original.from, 'reply', body, id, now, original.expiresAt,
+          idempotencyKey ?? null, idempotencyKey === undefined ? null : fingerprint);
       this.db.prepare('UPDATE messages SET answered_by=? WHERE id=?').run(replyId, id);
       return this.rawMessage(replyId);
     });

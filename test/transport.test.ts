@@ -9,7 +9,7 @@ import type { Message, Peer } from '../src/types.js';
 const peer: Peer = {
   id: 'peer_codex', host: 'codex', label: 'private label',
   nativeSessionId: '00000000-1111-2222-3333-444444444444', endpoint: null,
-  createdAt: 1, closedAt: null,
+  createdAt: 1, closedAt: null, attachedAt: 1, statusText: null, statusUpdatedAt: null,
 };
 const message: Message = {
   id: 'msg_example', pairingId: 'pair_example', from: 'peer_claude', to: peer.id,

@@ -10,6 +10,9 @@ export interface Peer {
   endpoint: string | null;
   createdAt: number;
   closedAt: number | null;
+  attachedAt: number | null;
+  statusText: string | null;
+  statusUpdatedAt: number | null;
 }
 
 export interface Pairing {
@@ -18,6 +21,11 @@ export interface Pairing {
   b: string;
   createdAt: number;
   closedAt: number | null;
+}
+
+export interface ConnectedPeer {
+  peer: Peer;
+  pairing: Pairing;
 }
 
 export interface Message {
@@ -61,9 +69,13 @@ export interface DeliveryResult {
 export interface StoreContract {
   readonly home: string;
   createPeer(input: {host: Host; label: string; nativeSessionId?: string; endpoint?: string}): {peer: Peer; ticket: string};
+  ensureCodexPeer(input: {nativeSessionId: string; label?: string; attach?: boolean}): Peer;
+  findNativePeer(nativeSessionId: string, host?: Host): Peer | null;
   attach(ticket: string): Peer;
   peer(id: string): Peer;
   peers(): Peer[];
+  connectedPeers(self: string): ConnectedPeer[];
+  updateStatus(self: string, status: string): Peer;
   setEndpoint(id: string, endpoint: string | null): void;
   closePeer(id: string): void;
   pair(self: string, other: string): Pairing;
@@ -72,9 +84,10 @@ export interface StoreContract {
   send(self: string, input: SendInput): Message;
   message(self: string, id: string): Message;
   inbox(self: string): Message[];
+  incoming(self: string): Message[];
   history(self: string, limit?: number): Message[];
   claim(self: string, id: string, leaseSeconds?: number): Claim;
-  reply(self: string, id: string, claimId: string, body: string): Message;
+  reply(self: string, id: string, claimId: string, body: string, idempotencyKey?: string): Message;
   cancel(self: string, id: string): Message;
   beginDelivery(id: string): boolean;
   finishDelivery(id: string, result: DeliveryResult): void;
