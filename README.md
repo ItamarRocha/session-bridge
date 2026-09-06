@@ -2,9 +2,9 @@
 
 Connect existing Codex and Claude Code sessions by their native IDs. Each session can connect to multiple peers, publish a short “working on” line, and exchange bounded messages in its original conversation.
 
-The bridge keeps a local message ledger and delivers through Codex's `queue` command and Claude Code's native `Monitor` tool. It does not launch or resume model sessions. Small MCP and receiver helpers run alongside your clients; Codex delivery uses a brief CLI helper. Goals, tasks, model authentication and permissions stay with the official clients.
+The bridge keeps a local message ledger and delivers through Codex's `queue` command and Claude Code's native `Monitor` tool. It does not launch or resume model sessions. Claude's explicitly started receiver watches a durable SQLite inbox and survives normal turn boundaries. Small MCP and receiver helpers run alongside your clients; Codex delivery uses a brief CLI helper. Goals, tasks, model authentication and permissions stay with the official clients.
 
-**Status:** the six-method interface, native session addressing, explicit Claude activation and self-status are implemented for one OS user on one machine. Automated checks exercise isolated clients and state. Native idle, busy and restart behavior needs separate evidence; see the [live validation record](docs/live-validation.md) and [support guide](docs/support.md).
+**Status:** v0.3.0 keeps the six-method interface and adds durable Claude inbox delivery, receiver availability and restart continuity for one OS user on one machine. The new receiver has not yet established native Claude UI acceptance; prior live evidence is versioned separately. Automated checks exercise isolated clients and state. Native idle, busy and restart behavior needs separate evidence; see the [live validation record](docs/live-validation.md) and [support guide](docs/support.md).
 
 | MCP method | Purpose |
 | --- | --- |
@@ -29,7 +29,7 @@ npm run verify
 node dist/cli.js doctor
 ```
 
-Keep this checkout in a durable location. The plugin needs the locally built `dist/cli.js` and installed `node_modules`; rebuild after updating source. Building does not change client configuration.
+Keep this checkout in a durable location. The plugin needs the locally built `dist/cli.js` and installed `node_modules`; rebuild after updating source. Building does not change client configuration or replace the installed live plugin. Before opening an existing ledger with v0.3.0, stop all old bridge helpers: the upgrade writes schema 3 and older binaries must not share it. See [upgrading](docs/support.md#upgrading-to-v030).
 
 Codex delivery inherits the launching environment's `CODEX_HOME` by default. If Claude runs under a different Codex account profile from the destination, set `SESSION_BRIDGE_CODEX_HOME` to the destination's absolute Codex home path when launching Claude or its bridge helper. This override affects the child Codex command only; it does not change Claude's environment or another client's settings. `doctor` checks Codex through that same child environment. `CODEX_SQLITE_HOME` or `sqlite_home` configuration can select a different queue directory; see [Codex profile routing](docs/support.md#codex-profile-routing). A successful submission to another profile's queue does not establish receipt.
 
@@ -45,7 +45,7 @@ ln -s "$bridge_project" "$HOME/.claude/skills/session-bridge"
 
 The symlink command fails if that destination already exists. Inspect an existing installation before updating it.
 
-In the existing Claude conversation, run `/reload-plugins`, then `/session-bridge:connect` when you want to activate its receiver. Opening another terminal or loading the plugin leaves its bridge dormant. The command uses Claude's native `Monitor` tool with this conversation's current native ID; a `PreToolUse` hook supplies that ID freshly for each bridge tool call. Users and models no longer exchange private attachment tickets. See Claude's [Monitor tool](https://code.claude.com/docs/en/tools-reference#monitor-tool), [skill substitutions](https://code.claude.com/docs/en/skills#available-string-substitutions) and [hook input](https://code.claude.com/docs/en/hooks#common-input-fields).
+In the existing Claude conversation, run `/reload-plugins`, then `/session-bridge:connect` when you want to activate its receiver. Opening another terminal or loading the plugin leaves its bridge dormant. The command uses Claude's native `Monitor` tool with `persistent: true` and this conversation's current native ID; a `PreToolUse` hook supplies that ID freshly for each bridge tool call. Users and models no longer exchange private attachment tickets. See Claude's [Monitor tool](https://code.claude.com/docs/en/tools-reference#monitor-tool), [skill substitutions](https://code.claude.com/docs/en/skills#available-string-substitutions) and [hook input](https://code.claude.com/docs/en/hooks#common-input-fields).
 
 You can supply a destination immediately:
 
@@ -55,7 +55,7 @@ You can supply a destination immediately:
 
 Use `codex:UUID` for a Codex task that has not used the bridge yet. Connecting stores a pending connection silently. Claude's first message queues a notification to that task; the target can read it from its own shell and bind the connection without a reciprocal connect or MCP reload. Delivery still depends on the owning Codex client consuming its native queue. A UUID does not open an unloaded task. [Codex queue source](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/ext/queue/src/service.rs)
 
-An already registered peer accepts its bare UUID, or a `codex:` / `claude:` prefix. An unknown bare UUID returns `activation_required`; the bridge does not guess its provider. An inactive Claude target must first run `/session-bridge:connect` in that conversation. A UUID alone is not a route to another machine.
+An already registered peer accepts its bare UUID, or a `codex:` / `claude:` prefix. An unknown bare UUID returns `activation_required`; the bridge does not guess its provider. A never-registered Claude target must first run `/session-bridge:connect` in that conversation. A registered target whose receiver is stopped can still be connected and receive queued messages; restarting its watcher is required for notification. A UUID alone is not a route to another machine.
 
 To list this conversation's connected peers, run:
 
@@ -63,7 +63,7 @@ To list this conversation's connected peers, run:
 /session-bridge:sessions
 ```
 
-It shows native IDs, providers, connection state and the latest reported status with its timestamp. Listing leaves an inactive bridge dormant. After updating the plugin, run `/reload-plugins` once to load the new command.
+It shows native IDs, providers, saved connections, receiver availability and the latest self-reported status. A stopped receiver can have retained connections; listing shows those while pointing to explicit activation. Listing leaves an inactive bridge dormant. After updating the plugin, run `/reload-plugins` once to load the new command.
 
 ## Use an existing Codex task without reloading tools
 
@@ -92,9 +92,9 @@ node dist/cli.js messages-read --host codex --message MESSAGE_ID
 node dist/cli.js disconnect --host codex --target PEER_SESSION_UUID
 ```
 
-Incoming history includes previously read messages and receipt evidence. Inspect that evidence before repeating side effects. Selecting a sent message is read-only. `submitted` means the adapter handed off a notification; a receipt and a substantive reply are separate facts. An `unknown` outcome requires inspection, not an automatic resend. [Message lifecycle](docs/design.md#message-lifecycle)
+Claude-bound sends are stored even while its receiver is unavailable. Restarting that receiver in the same native conversation preserves connections and history and processes eligible unread inbox entries. Incoming history includes previously read messages and receipt evidence. Inspect that evidence before repeating side effects. Selecting a sent message is read-only. `deliveryStage` separates `queued`, `notified`, `read` and `replied`. `notified` records a completed write to Claude's native receiver stream; only the agent's read records receipt. Codex `submitted` means its native queue accepted the notification. An `unknown` outcome requires inspection, not an automatic resend. [Message lifecycle](docs/design.md#message-lifecycle)
 
-Status is a timestamped self-report, not proof that a model is currently running. Disconnecting one peer fences pending bridge work on that connection; it does not undo completed actions or stop either native session.
+A receiver has a short ownership lease and reports `available`, `unavailable` or `unknown` independently of the saved connection. Its timestamps describe helper availability, not model activity. Status text remains a timestamped self-report. Disconnecting one peer fences pending bridge work on that connection; it does not undo completed actions or stop either native session.
 
 ## Optional Codex MCP installation
 
@@ -113,7 +113,7 @@ The `.codex-plugin` package also supports a personal marketplace installation. A
 
 ## Compatibility and scope
 
-The default MCP catalog contains six methods. `mcp --host codex|claude --legacy-tools` explicitly opts into the old ten-tool catalog for the v0.2 migration window. Legacy CLI operations remain available for diagnostics, exceptional cancellation and full receiver shutdown; see [operator recovery](docs/support.md#operator-recovery). Existing `sb_…` IDs remain internal/operator identifiers, not the new public session address.
+The default MCP catalog contains six methods. `mcp --host codex|claude --legacy-tools` explicitly opts into the old ten-tool catalog for compatibility with the previous interface. Legacy CLI operations remain available for diagnostics, exceptional cancellation and full receiver shutdown; see [operator recovery](docs/support.md#operator-recovery). Existing `sb_…` IDs remain internal/operator identifiers, not the new public session address.
 
 Connect only sessions within the user's authorized scope. Connections do not grant broader task or native permission authority. Local CLI access is operator authority under this OS account, not isolation against other processes running as you. Message contents may be processed by the receiving model provider. No bridge goal engine, workflow scheduler or automatic permission supervisor is included.
 

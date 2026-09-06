@@ -1,6 +1,6 @@
 # Session Bridge live validation
 
-Recorded 5 September 2026 for the v0.2 implementation on `codex/simple-session-interface`. The native trial used an isolated ledger and two newly created Codex desktop tasks. The existing installed plugin and main checkout were not replaced.
+Historical native evidence recorded 5 September 2026 for the v0.2 implementation on `codex/simple-session-interface`. The v0.3.0 durable inbox receiver is a separate change and has not established live Claude UI acceptance here. The native trial used an isolated ledger and two newly created Codex desktop tasks. The existing installed plugin and main checkout were not replaced.
 
 ## Observed Codex roundtrip
 
@@ -55,3 +55,14 @@ After the profile-routing correction, `npm run verify` passed **64 tests**. New 
 | Automatic native permission approval | Outside this version; native permission rules remain in force |
 
 The computer-use tool denied access to Terminal, so the user was given a session-scoped Claude launch command for the isolated worktree. No alternative control path was used to bypass that denial. The user's subsequent trial exposed the profile-routing failure recorded above; it does not change the earlier successful Codex-only result.
+
+
+## v0.3.0 receiver acceptance remains separate
+
+The reliability implementation replaces Claude per-message socket delivery with a durable SQLite inbox watcher, adds receiver lease availability and preserves native identity/history/connections across watcher restart. Explicit activation now asks the native Monitor to persist across turns. The six public methods and client permission boundaries remain unchanged.
+
+Local `npm run verify` passed 87 tests on 5 September 2026, including a real receiver subprocess killed with SIGKILL, lease expiry, offline storage, explicit restart under the same native ID, preserved connections/receipts and one final reply. The MCP fixture blocks the IPC directory with a regular file, so its exchange cannot use bridge sockets. Full stdout pipes also verify bounded CLI exit on failures during startup and notification output. These are process and protocol checks with simulated host notifications and a fake Codex queue executable; they do not run a Claude model.
+
+The earlier Codex result, failed Claude routing attempt and automated counts above describe their recorded versions. They do not prove the new receiver's behavior in Claude's native UI. Before marking that accepted, observe a harmless Claude-bound request remaining queued while its watcher is stopped, explicit restart in the original native conversation, notification followed by an actual agent read and one substantive result, and preserved connections/history. Also verify that a fresh terminal and read-only session listing do not activate a watcher.
+
+The new implementation and test checkout do not replace the user's installed live plugin or upgrade its ledger. Any native trial must identify the checkout/version, isolated or upgraded ledger, and original conversation IDs used.
