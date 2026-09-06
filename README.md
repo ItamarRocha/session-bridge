@@ -4,7 +4,7 @@ Connect existing Codex and Claude Code sessions by their native IDs. Each sessio
 
 The bridge keeps a local message ledger and delivers through Codex's `queue` command and Claude Code's native `Monitor` tool. It does not launch or resume model sessions. Claude's explicitly started receiver watches a durable SQLite inbox and survives normal turn boundaries. Small MCP and receiver helpers run alongside your clients; Codex delivery uses a brief CLI helper. Goals, tasks, model authentication and permissions stay with the official clients.
 
-**Status:** v0.3.0 keeps the six-method interface and adds durable Claude inbox delivery, receiver availability and restart continuity for one OS user on one machine. The new receiver has not yet established native Claude UI acceptance; prior live evidence is versioned separately. Automated checks exercise isolated clients and state. Native idle, busy and restart behavior needs separate evidence; see the [live validation record](docs/live-validation.md) and [support guide](docs/support.md).
+**Status:** v0.3.0 keeps the six-method interface and adds durable Claude inbox delivery, receiver availability and restart continuity for one OS user on one machine. A native Claude-to-Codex request and return receipt are now confirmed; earlier evidence is versioned separately. Automated checks exercise isolated clients and state. Native busy and restart behavior still needs separate evidence; see the [live validation record](docs/live-validation.md) and [support guide](docs/support.md).
 
 | MCP method | Purpose |
 | --- | --- |

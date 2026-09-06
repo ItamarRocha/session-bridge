@@ -1,0 +1,41 @@
+{
+  "bridgeVersion": "0.3.0",
+  "testedCommit": "d31c0ba847eaf831660196a5b7eed2d6c71876f7",
+  "schemaVersion": 3,
+  "replyCount": 1,
+  "messages": [
+    {
+      "id": "msg_bf8b0739-6806-425a-a07c-9385067a4290",
+      "kind": "request",
+      "reply_to": null,
+      "created_at": 1788662776151,
+      "expires_at": 1788666376151,
+      "delivery": "submitted",
+      "notified_at": null,
+      "acknowledged_at": 1788662802324,
+      "answered_by": "msg_183c95ec-1773-46f2-9471-32bddb729116",
+      "cancelled_at": null,
+      "from_provider": "claude",
+      "from_native_session": "e9abb110-e66e-469e-864f-80f248bcf378",
+      "to_provider": "codex",
+      "to_native_session": "01a07056-03b8-77b1-864a-470e8dcece14"
+    },
+    {
+      "id": "msg_183c95ec-1773-46f2-9471-32bddb729116",
+      "kind": "reply",
+      "reply_to": "msg_bf8b0739-6806-425a-a07c-9385067a4290",
+      "created_at": 1788662815046,
+      "expires_at": 1788666376151,
+      "delivery": "submitted",
+      "notified_at": 1788662815122,
+      "acknowledged_at": 1788662820018,
+      "answered_by": null,
+      "cancelled_at": null,
+      "from_provider": "codex",
+      "from_native_session": "01a07056-03b8-77b1-864a-470e8dcece14",
+      "to_provider": "claude",
+      "to_native_session": "e9abb110-e66e-469e-864f-80f248bcf378"
+    }
+  ],
+  "scope": "Live Claude request reached the original Codex task; its one reply was emitted by the durable inbox watcher and read by the original Claude session. Restart, busy-state behavior and rendered Claude terminal output were not observed in this trial."
+}
