@@ -1,0 +1,80 @@
+test/store-receiver.test.ts
+  s_e715395fcc9d04::t_9b09e63622a518 5,146-199
+  s_e715395fcc9d04::t_b89918596b8491 1-4,6-145,200-209,211-215,226-282,284-289,296-301,307-310,312-314,330-373
+  s_e715395fcc9d04::t_32a27f388c5b74 210
+  s_e715395fcc9d04::t_2042459f676743 283,290-295,302-306,311,315-329
+  s_e715395fcc9d04::t_f9e6dc0f621a3b 216-225
+src/sessions.ts
+  s_e715395fcc9d04::t_1e70ae2f13061d 75,90-92,110,121-124,136,161,167
+  s_e715395fcc9d04::t_07b657557e4145 118
+test/cli-monitor.test.ts
+  s_e715395fcc9d04::t_c7801870626902 1-39
+  s_e715395fcc9d04::t_2ef1b68056f29d 40-70
+src/mcp.ts
+  s_e715395fcc9d04::t_07b657557e4145 10,71,91,99
+src/types.ts
+  s_e715395fcc9d04::t_5587177b479f28 31-36,54,81-87
+src/store.ts
+  s_e715395fcc9d04::t_09c52635c068aa 355
+  s_e715395fcc9d04::t_d33f5052fbb0f4 305-316,318-337,344-354,356-389,438-439,449-450,456
+  s_e715395fcc9d04::t_5587177b479f28 8,12,14,95,145-153,159
+  s_e715395fcc9d04::t_de654806b48de7 317
+  s_e715395fcc9d04::t_2ec52f94163daa 206-231,254-259,281-285
+  s_e715395fcc9d04::t_73eee2124974b1 338-343
+  s_e715395fcc9d04::t_b76691a70ab137 286,494-499,514,529,535-536,538-539,545,547,549,551,558,576,581,583-585,613
+test/integration.test.ts
+  s_e715395fcc9d04::t_ea4420dab6794c 45-54,56-79,82-88,97-99,113,116-121,149
+  s_e715395fcc9d04::t_b7335f8f687019 55,80-81
+test/store.test.ts
+  s_e715395fcc9d04::t_73eee2124974b1 70,172-176,321,331,444-445
+  s_e715395fcc9d04::t_5aba9e27c9209d 332-333,335-353
+  s_e715395fcc9d04::t_1cdbc7841434ec 197-270
+src/cli.ts
+  s_e715395fcc9d04::t_1e70ae2f13061d 91,106-114,116,120-124,129
+  s_e715395fcc9d04::t_8f0e11b081e8fb 115,117-119,126
+  s_e715395fcc9d04::t_bfba3963788edd 125,127-128
+test/mcp-sessions.test.ts
+  s_e715395fcc9d04::t_214b8ac80c8512 229-231,272,298
+  s_e715395fcc9d04::t_2bd66a2500138d 6,40-49,62,93,95-99,102-103,117,171,175-180,186-188,216
+  s_e715395fcc9d04::t_287a276e6c14a0 218-228,232-271,273-297,299-315
+  s_e715395fcc9d04::t_caac1e604aa1cf 217
+test/context-hook.test.ts
+  s_e715395fcc9d04::t_a40d620f9d7213 1-3,75-96
+  s_e715395fcc9d04::t_6990a6cf519e09 97
+test/sessions.test.ts
+  s_e715395fcc9d04::t_bbd2ad2051637c 30,35-39,47,254,259,261-266,284
+  s_e715395fcc9d04::t_07b657557e4145 59
+  s_e715395fcc9d04::t_f6e88133d2b14a 122-154
+.claude-plugin/plugin.json
+  s_e715395fcc9d04::t_0a941205e3fa22 3
+.codex-plugin/plugin.json
+  s_e715395fcc9d04::t_4c32d3a5f5df1f 3
+package.json
+  s_e715395fcc9d04::t_b6dae21492b03a 3
+src/bridge.ts
+  s_e715395fcc9d04::t_11c723fc1f1a73 2,103-105,107
+src/monitor.ts
+  s_e715395fcc9d04::t_c020978d20d0a3 3,5-22,24-26,29-35,37-52,54-61,63-64,66,68-69,71-77,79-81,83-97,99
+test/monitor.test.ts
+  s_e715395fcc9d04::t_4821aa99722bfd 1,4,6,8,11-20,23-40,42-114,116-160,163-194,196-205,208-232,234-245
+test/transport.test.ts
+  s_e715395fcc9d04::t_5c6c034fa0460c 2,5
+package-lock.json
+  s_e715395fcc9d04::t_68c9ab449256cb 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "3e550dd1b163009cc5bbc0d115e918b2b334d9ee",
+  "prompts": {},
+  "sessions": {
+    "s_e715395fcc9d04": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07056-03b8-77b1-864a-470e8dcece14",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Itamar Rocha Filho <itamardprf@gmail.com>"
+    }
+  }
+}
