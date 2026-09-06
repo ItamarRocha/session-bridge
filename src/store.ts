@@ -386,9 +386,17 @@ export class Store implements StoreContract {
       AND p.closed_at IS NULL AND sender.closed_at IS NULL ORDER BY m.created_at,m.id`).all(self, this.now()).map(messageRow);
   }
 
-  incoming(self: string): Message[] {
+  incoming(self: string, input: {limit?: number; after?: {createdAt: number; id: string}} = {}): Message[] {
     this.activePeer(self);
-    return this.db.prepare('SELECT * FROM messages WHERE to_peer=? ORDER BY created_at,id').all(self).map(messageRow);
+    const limit = input.limit ?? 100;
+    seconds(limit, 'Incoming limit', 101);
+    if (input.after) {
+      text(input.after.id, 'Incoming cursor ID', 128);
+      if (!Number.isSafeInteger(input.after.createdAt)) throw new Error('Incoming cursor timestamp must be a safe integer');
+      return this.db.prepare(`SELECT * FROM messages WHERE to_peer=? AND (created_at,id)>(?,?)
+        ORDER BY created_at,id LIMIT ?`).all(self, input.after.createdAt, input.after.id, limit).map(messageRow);
+    }
+    return this.db.prepare('SELECT * FROM messages WHERE to_peer=? ORDER BY created_at,id LIMIT ?').all(self, limit).map(messageRow);
   }
 
   history(self: string, limit = 100): Message[] {

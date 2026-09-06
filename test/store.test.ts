@@ -498,3 +498,32 @@ test('incoming recovery preserves previously received and terminal messages with
   f.store.closePeer(f.b.id);
   assert.throws(() => f.store.incoming(f.b.id), /closed/);
 });
+
+test('incoming keyset pages bound historical bodies and preserve received records through timestamp ties', (t) => {
+  const f = fixture(t);
+  const sent = [];
+  for (let index = 0; index < 105; index++) {
+    if (index === 104) f.advance(1000);
+    sent.push(f.store.send(f.a.id, { to: f.b.id, body: `Checkpoint ${index}`, kind: 'notice', idempotencyKey: `page-${index}` }));
+  }
+  const expected = sent.sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
+  assert.equal(f.store.incoming(f.b.id).length, 100);
+  assert.equal(f.store.incoming(f.b.id, { limit: 101 }).length, 101);
+  const firstPage = f.store.incoming(f.b.id, { limit: 7 });
+  assert.deepEqual(firstPage.map(({ id }) => id), expected.slice(0, 7).map(({ id }) => id));
+  const receipt = f.store.claim(f.b.id, firstPage[0]!.id);
+  assert.equal(f.open().incoming(f.b.id, { limit: 7 })[0]!.acknowledgedAt, receipt.message.acknowledgedAt);
+  const actual = firstPage.map(({ id }) => id);
+  let after = firstPage.at(-1)!;
+  for (;;) {
+    const next = f.store.incoming(f.b.id, { limit: 7, after: { createdAt: after.createdAt, id: after.id } });
+    assert.ok(next.length <= 7);
+    if (!next.length) break;
+    actual.push(...next.map(({ id }) => id));
+    after = next.at(-1)!;
+  }
+  assert.deepEqual(actual, expected.map(({ id }) => id));
+  for (const limit of [0, -1, 102, 1.5, NaN]) assert.throws(() => f.store.incoming(f.b.id, { limit }), /Incoming limit/);
+  assert.throws(() => f.store.incoming(f.b.id, { after: { createdAt: NaN, id: firstPage[0]!.id } }), /cursor timestamp/);
+  assert.throws(() => f.store.incoming(f.b.id, { after: { createdAt: 1_000_000, id: '' } }), /cursor ID/);
+});

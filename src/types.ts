@@ -84,7 +84,7 @@ export interface StoreContract {
   send(self: string, input: SendInput): Message;
   message(self: string, id: string): Message;
   inbox(self: string): Message[];
-  incoming(self: string): Message[];
+  incoming(self: string, input?: {limit?: number; after?: {createdAt: number; id: string}}): Message[];
   history(self: string, limit?: number): Message[];
   claim(self: string, id: string, leaseSeconds?: number): Claim;
   reply(self: string, id: string, claimId: string, body: string, idempotencyKey?: string): Message;
