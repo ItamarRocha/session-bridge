@@ -98,7 +98,7 @@ export class Bridge {
     return { detached: id };
   }
 
-  private async dispatch(message: Message): Promise<Message> {
+  async dispatch(message: Message): Promise<Message> {
     if (!this.store.beginDelivery(message.id)) return this.store.message(message.from, message.id);
     const peer = this.store.peer(message.to);
     try {

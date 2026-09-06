@@ -4,6 +4,8 @@ import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Store } from './store.js';
 import { Bridge } from './bridge.js';
+import { Sessions } from './sessions.js';
+import { claudeContextHook } from './context-hook.js';
 import { defaultHome } from './paths.js';
 import { doctor } from './doctor.js';
 import { startMonitor } from './monitor.js';
@@ -13,6 +15,17 @@ import type { Host } from './types.js';
 const usage = `Session Bridge — connect existing local Codex and Claude Code sessions
 
 session-bridge doctor
+session-bridge connect --host codex|claude --target [codex:|claude:]UUID
+session-bridge sessions --host codex|claude [--limit N] [--cursor CURSOR]
+session-bridge status-update --host codex|claude --text TEXT
+session-bridge message-send --host codex|claude --target UUID --key KEY --body-file PATH [--reply-to MESSAGE | --notice]
+session-bridge messages-read --host codex|claude [--message MESSAGE] [--limit N] [--cursor CURSOR]
+session-bridge disconnect --host codex|claude --target UUID
+
+Codex commands use the current shell's CODEX_THREAD_ID. Claude commands require a fresh
+--session-id supplied by the current skill/hook, never the MCP startup environment.
+MCP has six tools by default. --legacy-tools opts into the 0.1 catalog for migration.
+The following legacy/operator commands remain available:
 session-bridge attach --host codex --session-id UUID [--label TEXT]
 session-bridge peers
 session-bridge pair --self PEER --peer PEER
@@ -24,7 +37,7 @@ session-bridge cancel --self PEER --message MESSAGE
 session-bridge disconnect --self PEER --pairing PAIRING
 session-bridge stop --self PEER
 session-bridge mcp --host codex|claude
-session-bridge monitor [--label TEXT]
+session-bridge monitor [--session-id UUID] [--label TEXT]
 
 Options: --home PATH (or SESSION_BRIDGE_HOME), --codex-command PATH.
 For send/reply, --body-file PATH safely reads UTF-8 instead of --body.
@@ -37,8 +50,11 @@ async function main() {
   const options: ParseArgsOptionsConfig = Object.fromEntries([
     'home', 'host', 'session-id', 'label', 'self', 'peer', 'message', 'claim', 'pairing',
     'body', 'body-file', 'key', 'kind', 'ttl-seconds', 'codex-command',
+    'target', 'text', 'reply-to', 'limit', 'cursor',
   ].map(name => [name, { type: 'string' }]));
   options.help = { type: 'boolean' };
+  options['legacy-tools'] = {type: 'boolean'};
+  options.notice = {type: 'boolean'};
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     strict: true,
@@ -70,13 +86,23 @@ async function main() {
     if (!stat.isFile() || stat.size > 32_768) throw new Error('Body file must be a regular UTF-8 file no larger than 32 KiB.');
     return readFileSync(file, 'utf8');
   };
+  if (command === 'context-hook') {
+    let input = '';
+    for await (const chunk of process.stdin) {
+      input += String(chunk);
+      if (Buffer.byteLength(input) > 262144) throw new Error('Hook input exceeds 256 KiB.');
+    }
+    const output = claudeContextHook(JSON.parse(input));
+    if (output) process.stdout.write(`${JSON.stringify(output)}\n`);
+    return;
+  }
   const home = resolve(option('home') ?? defaultHome());
   const codexCommand = option('codex-command') ?? process.env.SESSION_BRIDGE_CODEX_COMMAND;
   const print = (value: unknown) => process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 
   if (command === 'doctor') { print(await doctor(home, codexCommand)); return; }
   if (command === 'monitor') {
-    const monitor = await startMonitor(home, option('label') ?? '', line => process.stdout.write(`${line}\n`));
+    const monitor = await startMonitor(home, option('label') ?? '', line => process.stdout.write(`${line}\n`), option('session-id'));
     const stop = () => void monitor.close().catch(() => { process.exitCode = 1; });
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
@@ -84,7 +110,7 @@ async function main() {
   }
   const store = new Store(home);
   if (command === 'mcp') {
-    const instance = await startMcp(store, host(), codexCommand);
+    const instance = await startMcp(store, host(), codexCommand, {legacy: Boolean(values['legacy-tools'])});
     let closed = false;
     const cleanup = () => {
       if (closed) return;
@@ -100,6 +126,20 @@ async function main() {
     return;
   }
   try {
+    if (['connect', 'sessions', 'status-update', 'message-send', 'messages-read'].includes(command) || (command === 'disconnect' && option('target'))) {
+      const provider = host();
+      const nativeId = provider === 'codex' ? process.env.CODEX_THREAD_ID ?? option('session-id') : option('session-id');
+      const sessions = new Sessions(store, provider, nativeId, codexCommand);
+      switch (command) {
+        case 'connect': print(await sessions.connect(required('target'))); break;
+        case 'sessions': print(sessions.list({limit: option('limit') === undefined ? undefined : Number(option('limit')), cursor: option('cursor')})); break;
+        case 'status-update': print(sessions.updateStatus(required('text'))); break;
+        case 'message-send': print(await sessions.send({sessionId: required('target'), text: body(), idempotencyKey: required('key'), replyTo: option('reply-to'), expectsReply: values.notice ? false : undefined})); break;
+        case 'messages-read': print(sessions.read({messageId: option('message'), limit: option('limit') === undefined ? undefined : Number(option('limit')), cursor: option('cursor')})); break;
+        case 'disconnect': print(sessions.disconnect(required('target'))); break;
+      }
+      return;
+    }
     if (command === 'peers') { print(store.peers()); return; }
     if (command === 'attach') {
       if (host() !== 'codex') throw new Error('Claude attaches through the private ticket from its monitor, using bridge_attach in MCP.');

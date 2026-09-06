@@ -1,43 +1,48 @@
 # Six methods for connecting and messaging
 
-Revised proposal · [Plan](collaboration-v2.md) · [Visual document](collaboration-v2.html)
+Implemented interface · [Design](collaboration-v2.md) · [Visual guide](collaboration-v2.html) · [Live validation](live-validation.md)
 
-The model should know who is connected, what they last said they were doing, and how to exchange messages. Goals, tasks, handoffs and reviews use native state and skill instructions. There are no collaboration-specific method groups or hidden workflow engine.
-
-These six names are the intended next interface. The running plugin still has its existing ten-tool catalog; this revision changes the design and collaboration instructions, not the registered tool names.
+The default MCP catalog exposes these six methods. Goals, tasks, handoffs and reviews use native state and the [shared skill](../skills/session-bridge/SKILL.md). There is no collaboration-specific method group or hidden workflow engine.
 
 | Method | Arguments | Result / effect |
 | --- | --- | --- |
-| `bridge_connect` | `sessionId` | Activate this caller when authorized, invite the selected native session, and return connected/pending/activation-required. Repeated calls reuse the connection. |
-| `bridge_sessions_list` | Optional `limit`, `cursor` | Connected-to-caller summaries: native ID, provider, label, connection, status text and timestamp. Read only; no wake or discovery scan. |
-| `bridge_status_update` | `text` | Replace this caller's short status. No target ID, assignment, task state or notification. |
-| `bridge_message_send` | `sessionId`, `text`, `idempotencyKey`, optional `replyTo`, `expectsReply` | Persist a targeted message or response and return its ID and delivery state. Reuse the key only for the same send. |
-| `bridge_messages_read` | Optional `messageId`, `limit`, `cursor` | Return incoming messages by default, or one authorized sent/received message selected by ID. Only incoming reads record receipt; sent-message inspection is read only. Include prior receipt/reply evidence without granting or completing work. |
-| `bridge_disconnect` | `sessionId` | Close this caller's connection to the selected peer. Other connections remain; external work is not undone. |
+| `bridge_connect` | `sessionId` | Connect this caller to the selected native session. Return `connected`, `pending` or `activation_required`. Repeated calls reuse the edge; connecting sends no notification. |
+| `bridge_sessions_list` | Optional `limit`, `cursor` | Return `self`, `activationRequired`, connected-to-caller `sessions` and `nextCursor`. Each summary has native ID, provider, label, connection and latest self-status. Read only; no wake or discovery scan. |
+| `bridge_status_update` | `text` | Replace this caller's one-line status, up to 512 UTF-8 bytes. Return its updated summary. No target identity, assignment or notification. |
+| `bridge_message_send` | `sessionId`, `text`, `idempotencyKey`; optional `replyTo`, `expectsReply` | Persist one targeted message or result and return its ID and delivery evidence. Text is limited to 32 KiB. Reuse the key only with identical input. |
+| `bridge_messages_read` | Optional `messageId`, `limit`, `cursor` | Return incoming history by default, or one authorized sent/received message selected by ID. Only incoming reads record receipt; sent inspection is read-only. |
+| `bridge_disconnect` | `sessionId` | Close this caller's connection to one peer in both directions. Return whether a connection was closed. Other peers and native sessions remain unchanged. |
 
-## Keep the callers' job small
+## Native identity and connection
 
-- The invoking session is bound by the bridge. There is no caller-supplied `from` identity or status update for another session.
-- Native session IDs are the public address. Extra attachment and receipt tokens are implementation details, not IDs the user copies between terminals.
-- Inbox reads return enough prior-receipt evidence to avoid blindly repeating side effects after a retry. A receipt means the bridge returned the message, not that the agent accepted or finished a task.
-- Sending with `replyTo` replaces the separate public reply operation; it does not create a review/handoff type. The facade must preserve current expiry, participant checks, single-result reply semantics and duplicate-send behavior. A further request starts another bounded exchange.
-- A new message expects one result by default. Set `expectsReply: false` for an informational update, such as handoff acceptance, so it neither consumes the final-result reply nor requests a courtesy acknowledgement. With `replyTo`, the response is terminal and `expectsReply: true` is invalid. This maps to the existing request/notice/reply transport.
-- Unknown delivery remains unknown until reconciled. Simplifying the interface does not authorize an automatic resend of an uncertain action.
+Public addresses are native UUIDs, optionally prefixed `codex:` or `claude:`. Known bare UUIDs resolve locally. An unregistered Codex destination requires `codex:UUID`; an unknown bare UUID returns `activation_required` rather than guessing its provider. An inactive Claude destination must explicitly activate its receiver first.
 
-## Status is a one-liner, not a synchronized goal
+Connecting to an unregistered Codex task creates a pending local connection. The first send submits a native queue notification. A targeted read of that incoming message binds the recipient from its own native context; no reciprocal connect is required. `pending` means that local recipient attachment has not occurred. `connected` means an attached relationship, not verified current model activity. Native delivery timing remains subject to the owning client. [Codex queue source](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/ext/queue/src/service.rs)
 
-Store `text`, `updatedAt` and its attributed source (the bound session) on the attachment. Examples: “reviewing the parser change,” “running benchmark B,” “waiting for the user's permission.” Show age/staleness. Do not present an old self-report as verified current execution.
+The bridge obtains caller identity per call: Codex supplies `_meta.threadId`; Claude's `PreToolUse` hook inserts the current `session_id` in private `_sessionId` plumbing. Models should not supply or override that field. The Codex CLI uses its own shell's `CODEX_THREAD_ID`; Claude CLI calls require a current session ID from the invoking skill or hook. Missing context fails with guidance rather than selecting another session. [Codex MCP source](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/core/src/mcp_tool_call.rs#L506), [Claude hook input](https://code.claude.com/docs/en/hooks#common-input-fields)
 
-Only update on a meaningful change. Publishing status never starts another model turn. An optional file or native task reference may appear in the text; there is no shared goal ID, work record, task mirror, state transition or completion gate.
+The local ledger is shared under one OS account. Native context prevents accidental session mix-ups; it is not a security boundary against another process with that account's filesystem access.
 
-## What moves out of the public tool catalog
+## Messages and receipts
 
-Attachment and pairing become part of connect. Receipt claiming and claim-token management become part of inbox/read and the bound connection. Reply handling becomes part of send. Message inspection is the same inbox read narrowed by message ID. Full shutdown, exceptional cancellation/recovery and diagnostics stay in existing operator/CLI controls.
+New messages expect one substantive result by default. Set `expectsReply: false` for an informational notice, such as handoff acceptance. To reply, first read the request, then send to its original sender with `replyTo` set to the request ID and a stable result idempotency key. A reply is terminal; `expectsReply: true` is invalid with `replyTo`. Further work starts a new bounded request.
 
-The removed goal, goal-control, work, handoff, review, subscription and permission groups are not future phases. Use the [shared skill](../skills/session-bridge/SKILL.md) for collaboration. Automatic native permission approval is omitted; a conversation cannot substitute for the host's permission decision.
+The bridge checks participants, expiry, connection validity and single-result semantics. It manages receipt tokens internally. A notice does not consume the request's final reply. Transport submission, receipt and actual completion remain distinct. Unknown delivery is never automatically retried.
 
-## Implementation and compatibility
+`bridge_messages_read` returns a `messages` array and `nextCursor`. Default history includes previously read incoming messages, rather than just unread items. `previouslyRead`, receipt times and `answeredBy` help the agent inspect prior progress. A returned receipt is not task acceptance or permission to repeat an action.
 
-Reuse the existing Store and delivery adapters. Add only the self-status projection and native identity/connection improvements. Update the MCP facade, CLI help and skill together at the interface revision. Keep existing entry points usable through an explicit migration window; do not advertise both catalogs indefinitely.
+Bulk history retains entries whose receipt is blocked, with `actionable: false` and `blockedReason`. Selecting a blocked incoming message returns the same non-actionable evidence. A provisional Codex recipient binds only after an eligible targeted read succeeds. Notices, replies and answered requests are not new actionable requests; incorporate useful information without a courtesy response. Selecting a sent message by ID is read-only and cannot claim it.
 
-Test the six operations as a user journey. Also check that reading/listing does not activate another session, status cannot impersonate a peer, stale status stays stale, retries preserve message identity, and disconnecting one peer preserves other connections. No workflow database or scheduler is needed for these checks.
+Both list/read accept a limit of 1–100, default 20, and an opaque cursor. Follow `nextCursor` until it is null to inspect further history. Repeating a page can return existing receipts; it must not cause duplicate external work.
+
+## Self-status
+
+Session summaries include `sessionId`, prefixed `address`, `provider`, `label`, `connection`, and `status`. Status is null until published, otherwise `{text, updatedAt, source: "self_report"}`. Times are Unix milliseconds. Updates are silent and accepted only for the invoking session; there is no target field or native task synchronization.
+
+Show when the text was reported. An old status does not become evidence of “running,” “idle” or “offline.” Update it on meaningful changes of focus, not on every tool call.
+
+## Compatibility and operator controls
+
+The six methods consolidate attachment/pairing and receipt/reply plumbing. `mcp --host codex|claude --legacy-tools` opts into the old ten-method catalog for v0.2 migration; it does not add that catalog to the default six. Old CLI commands remain for diagnostics, exceptional cancellation and full receiver shutdown. [Operator recovery](support.md#operator-recovery)
+
+The bridge includes no goal, work, handoff, review, subscription or permission methods. Messages and skill instructions express collaboration; actual native tool permissions remain with the host.

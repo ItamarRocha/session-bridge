@@ -1,6 +1,6 @@
 {
   "name": "session-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pair existing Codex and Claude Code sessions for bounded request and reply.",
   "author": {
     "name": "Itamar Rocha",
@@ -10,7 +10,5 @@
   "license": "UNLICENSED",
   "skills": "./skills/",
   "mcpServers": "./claude.mcp.json",
-  "experimental": {
-    "monitors": "./monitors/monitors.json"
-  }
+  "hooks": "./hooks/hooks.json"
 }

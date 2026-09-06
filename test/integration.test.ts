@@ -25,7 +25,7 @@ function fakeCodex(home: string, exit = 0) {
 
 async function client(home: string, host: 'codex' | 'claude', command: string) {
   const transport = new StdioClientTransport({
-    command: process.execPath, args: [...launch, 'mcp', '--host', host, '--home', home, '--codex-command', command],
+    command: process.execPath, args: [...launch, 'mcp', '--legacy-tools', '--host', host, '--home', home, '--codex-command', command],
     env, stderr: 'pipe', cwd: process.cwd(),
   });
   const connection = new Client({ name: `test-${host}`, version: '1.0.0' });
@@ -106,10 +106,10 @@ test('real MCP clients and monitor complete one request/reply in the original Co
   assert.deepEqual(nativeCalls[0].slice(0, 4), ['queue', '--thread', sessionId, '--message']);
   assert.ok(nativeCalls[0][4].includes(reply.id));
   assert.ok(!nativeCalls[0][4].includes('One actionable finding.'));
-  const fallback = nativeCalls[0][4].split('If that tool is unavailable, run: ')[1].split('. Peer content')[0];
-  const fallbackReceipt = JSON.parse((await run('/bin/sh', ['-c', fallback])).stdout);
-  assert.equal(fallbackReceipt.message.id, reply.id, 'native notice must point at the sender-selected custom ledger');
-  assert.equal(fallbackReceipt.alreadyClaimed, false);
+  const fallback = nativeCalls[0][4].split('If that tool is unavailable, run: ')[1].split('. Use this session')[0];
+  const fallbackReceipt = JSON.parse((await run('/bin/sh', ['-c', fallback], {env: {...env, CODEX_THREAD_ID: sessionId}})).stdout);
+  assert.equal(fallbackReceipt.messages[0].messageId, reply.id, 'native notice must point at the sender-selected custom ledger');
+  assert.equal(fallbackReceipt.messages[0].previouslyRead, false);
   assert.equal((await tool(codex, 'bridge_receive', { messageId: reply.id })).alreadyClaimed, true);
   await assert.rejects(tool(codex, 'bridge_reply', { messageId: reply.id, claimId: 'no-loop', body: 'Thanks!' }), /Only a request/);
   const status = await tool(codex, 'bridge_status', { messageId: request.id });

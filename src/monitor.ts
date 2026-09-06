@@ -4,7 +4,7 @@ import { newSocketPath } from './paths.js';
 import { listenForNotices, messageNotice } from './transport.js';
 import type { Peer } from './types.js';
 
-export async function startMonitor(home: string, label: string, output: (line: string) => void) {
+export async function startMonitor(home: string, label: string, output: (line: string) => void, sessionId?: string) {
   const store = new Store(home);
   let peer: Peer | undefined;
   let listener: Awaited<ReturnType<typeof listenForNotices>> | undefined;
@@ -22,8 +22,11 @@ export async function startMonitor(home: string, label: string, output: (line: s
   })();
   const seen = new Map<string, number>();
   try {
-    const created = store.createPeer({ host: 'claude', label: label || `Claude (${basename(process.cwd())})` });
+    const created = store.createPeer({
+      host: 'claude', label: label || `Claude (${basename(process.cwd())})`, nativeSessionId: sessionId,
+    });
     peer = created.peer;
+    if (sessionId) store.attach(created.ticket);
     const ownPeer = peer;
     const path = newSocketPath(home);
     listener = await listenForNotices(path, (id) => {
@@ -36,11 +39,14 @@ export async function startMonitor(home: string, label: string, output: (line: s
       const pairing = store.pairings(ownPeer.id).find(p => p.id === message.pairingId);
       if (!pairing || pairing.closedAt !== null) throw new Error('Pairing is disconnected.');
       if (message.acknowledgedAt !== null || seen.has(id)) return;
-      output(messageNotice(message, home));
+      output(messageNotice(message, home, ownPeer));
       seen.set(id, message.expiresAt);
     });
     store.setEndpoint(peer.id, path);
-    output(`Session Bridge monitor ready. Your shareable peer ID is ${peer.id}. Bind this session's MCP tools by calling bridge_attach with ${JSON.stringify({ ticket: created.ticket })}. Keep the ticket in this session; share only the peer ID. Pairing alone does not authorize tasks from another agent.`);
+    peer = store.peer(peer.id);
+    output(sessionId
+      ? `Session Bridge receiver ready for Claude session ${sessionId}. Call bridge_connect with the native session ID selected by the user. Connecting permits messages; work follows this session's existing scope and permissions.`
+      : `Session Bridge monitor ready. Your shareable peer ID is ${peer.id}. Bind this session's MCP tools by calling bridge_attach with ${JSON.stringify({ ticket: created.ticket })}. Keep the ticket in this session; share only the peer ID. Pairing alone does not authorize tasks from another agent.`);
     check = setInterval(() => {
       try {
         for (const [id, expiresAt] of seen) if (expiresAt <= Date.now()) seen.delete(id);

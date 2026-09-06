@@ -1,10 +1,10 @@
 # Session Bridge: messages between existing sessions
 
-Revised plan · 2026-09-05 · [Visual document](collaboration-v2.html) · [Six-method interface](plugin-methods.md)
+Implemented design · 2026-09-05 · [Visual document](collaboration-v2.html) · [Six-method interface](plugin-methods.md)
 
 **The bridge connects sessions and carries messages. The agents manage their work.** Use each client's existing goals, tasks and conversation state. There is no bridge goal, work queue, review object, ownership engine or collaboration scheduler.
 
-This replaces the earlier workflow-engine proposal. The six-method interface, native-ID connection and status one-liners remain planned. Explicit Claude activation and the existing message transport are implemented; the collaboration instructions are updated in this revision.
+The six-method interface, native-ID connections, self-status and explicit Claude receiver activation are implemented. Native client acceptance is tracked separately in the [live validation record](live-validation.md); automated transport checks alone do not prove the agent journey.
 
 ## What belongs where
 
@@ -16,7 +16,7 @@ This replaces the earlier workflow-engine proposal. The six-method interface, na
 | Continuing independent work; remembering a pending reply | A short status published by each session |
 | Native waiting, resumption and permission handling | Delivery through the existing client adapters |
 
-Removing the public workflow methods also removes their proposed tables, state machines, scheduler, leases, subscriptions and policy engine. They are not retained as a hidden service behind the skill.
+The bridge has no workflow tables, state machines, scheduler, work leases, review subscriptions or policy engine. Message receipt leases remain transport bookkeeping; they do not assign ownership of work.
 
 ## Six methods
 
@@ -35,7 +35,7 @@ Attachment tickets, receipt tokens and provider routing stay inside the implemen
 
 Each row contains native ID, provider, label, connection state and the latest self-published status with a timestamp. For example: **“Claude · connected · running benchmark B · updated 2 minutes ago.”** A short update can mention a file or native task when useful; it does not create a shared work record.
 
-Status updates are silent metadata changes. They do not wake other models or become assignments. A stale update stays labelled stale; it does not prove the model is running, idle or offline. The first version does not scan transcripts or synchronize native task databases to reconstruct status.
+Status updates are silent metadata changes. They do not wake other models or become assignments. The timestamp shows when a status was reported; callers can display its age. An old report does not prove the model is running, idle or offline. The bridge does not scan transcripts or synchronize native task databases to reconstruct status.
 
 Native goal/task facilities are not a common cross-provider interface. Use what the current client actually exposes; otherwise preserve the plan and pending response in its conversation. Claude's documented task tools are conditional on model/configuration, so even native task-tool availability should not be assumed universally. [Claude task tool availability](https://code.claude.com/docs/en/tools-reference#task-tool-availability)
 
@@ -52,26 +52,26 @@ The [shared skill](../skills/session-bridge/SKILL.md) supplies the behavior:
 
 These are model behaviors, not transactional guarantees. This simpler bridge does not guarantee that two idle, interrupted or exited clients will resume themselves. It retains messages and delivers through the supported native mechanisms; native execution and the agents' instructions determine continuation. If a real experiment reveals a specific gap, address that gap rather than adding a second task manager in advance.
 
-## Multiple peers and one-sided setup remain
+## Multiple peers and one-sided setup
 
-One session can connect to many others, regardless of provider. The existing ledger already passed a four-peer isolated check with both same-provider combinations. Connections stay explicit; A–B and A–C do not silently establish B–C. Completing an agent's task does not disconnect its other peers.
+One session can connect to many others, regardless of provider. Connections stay explicit; A–B and A–C do not silently establish B–C. Disconnecting one peer leaves other connections intact. Local automated checks exercise this topology; native multi-session evidence is recorded separately.
 
-Keep native IDs as the intended address. The existing release still exposes bridge IDs; migration needs a stable native identity and a fresh connection generation. A fresh Claude identity must not be inferred solely from a stale MCP startup environment. [Claude identity variables](https://code.claude.com/docs/en/env-vars)
+Native UUIDs are the public address, with optional `codex:` or `claude:` prefixes. Known bare IDs resolve locally. An unregistered Codex target requires `codex:UUID`; unknown bare IDs return `activation_required` rather than guessing their provider. Claude uses fresh hook `session_id` for each MCP call and the current skill ID for explicit receiver startup. Codex supplies current `_meta.threadId`, or its task shell supplies `CODEX_THREAD_ID`. [Claude hook input](https://code.claude.com/docs/en/hooks#common-input-fields), [Codex MCP source](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/core/src/mcp_tool_call.rs#L506)
 
-Claude initiating toward a loaded Codex task can use the supported native queue for an invitation and recipient bootstrap, subject to a live test. A dormant Claude receiver still requires explicit activation. An invitation stays pending until the recipient acknowledges it; absent acknowledgement is not proof of offline status. [Codex queue source](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/ext/queue/src/service.rs), [Claude plugin monitors](https://code.claude.com/docs/en/plugins-reference#monitors)
+Connecting to an unregistered Codex task silently saves a pending edge. The first send queues a notification; an eligible targeted read binds that existing task from its own context without a reciprocal connect. A pending relationship is not evidence of offline status. Delivery requires the owning client to consume its queue and the helper to have access to native queue storage. A dormant Claude receiver still needs `/session-bridge:connect`; opening a terminal leaves it dormant. [Codex queue source](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/ext/queue/src/service.rs), [Claude Monitor tool](https://code.claude.com/docs/en/tools-reference#monitor-tool)
 
 Actual remote/cloud transport is outside this local version. A session UUID alone is not a route between machines.
 
 ## Permissions stay native
 
-Remove permission methods and automatic cross-agent approval from this version. Agents may discuss an action, but an “approved” chat message does not approve a blocked tool. Implementing that later would need a real, explicitly authorized native hook adapter; instructions alone cannot do it. It is not a required stage of this plan. [Claude PermissionRequest](https://code.claude.com/docs/en/hooks#permissionrequest)
+Permission methods and automatic cross-agent approval are outside this version. Agents may discuss an action, but an “approved” chat message does not approve a blocked tool. Implementing that later would need a real, explicitly authorized native hook adapter; instructions alone cannot do it. It is not a required stage of this plan. [Claude PermissionRequest](https://code.claude.com/docs/en/hooks#permissionrequest)
 
-## Small implementation plan
+## Implementation and acceptance
 
-1. **Simplify the facade.** Consolidate existing attach/pair and message/receipt operations behind the six methods. Keep the current transport's cancellation, deduplication and conservative handling of uncertain delivery. Migrate existing callers deliberately.
-2. **Add status and native addressing.** Store only each session's short status and update time alongside connection metadata. Implement native-ID binding and one-sided bootstrap without enrolling unrelated sessions.
-3. **Prove the human journey.** Use selected existing sessions to connect, list status, send a review request, continue independent work, receive findings and resume the original task. Then repeat with multiple peers and one busy destination.
+1. **Six-method facade — implemented.** The `Sessions` facade consolidates attach/pair and message/receipt operations over the existing store and adapters. Default MCP exposes six tools. `--legacy-tools` selects the previous catalog for the v0.2 migration window; exceptional recovery remains in operator CLI controls.
+2. **Native addressing and self-status — implemented.** Connections use native IDs; status stores only text and a timestamp. Claude activation uses an explicit native Monitor call and fresh per-call identity. Codex supports a pending one-sided connection and targeted recipient binding.
+3. **Real-session acceptance — evidence required.** Use selected sessions to connect, list status, request a review, continue independent work, receive findings and resume the original task. Repeat with multiple peers and a busy destination. Record observations and remaining gaps in [live-validation.md](live-validation.md).
 
-The bridge keeps its current Codex queue and Claude monitor adapters. No new model sessions, workflow scheduler or provider credential handling are introduced. Preserve the distinction between transport submission, receipt and an actual substantive response.
+The bridge preserves cancellation, duplicate-send protection, durable receipt history and conservative uncertain delivery. It introduces no model session spawning, workflow scheduler or provider credential handling. Submission, receipt and a substantive result remain separate facts.
 
-Validation should cover explicit activation, native-ID reuse, stale status, exact recipient scope, durable receipts, duplicate sends and one-peer disconnection preserving the others. Native idle/busy behavior still requires live testing. These documents were checked structurally; rendered preview was previously blocked by browser policy.
+The [support guide](support.md) distinguishes automated checks from native idle/busy, restart and permission behavior. The visual document has structural checks; browser-rendered acceptance is a separate check.

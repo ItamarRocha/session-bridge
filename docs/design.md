@@ -2,62 +2,66 @@
 
 ## Existing conversations connected by messages
 
-The bridge moves selected messages between existing conversations. One attachment can connect to several peers, including peers of the same provider. It has no model credentials, inference client, or session-spawning API. Goals and tasks remain in the clients; the bridge owns connections and message delivery. The [simplified plan](collaboration-v2.md) describes the next interface.
+The bridge moves selected messages between existing conversations. Each session can connect to several peers, including peers of the same provider. It has no model credentials, inference client or session-spawning API. Goals, tasks and collaboration decisions remain in the clients. The bridge owns connections, durable messages and a short self-status. [Six-method interface](plugin-methods.md)
 
 ```mermaid
 flowchart LR
-  C[Existing Codex task] -->|CLI or MCP tools| L[(Local SQLite ledger)]
-  A[Existing Claude session] -->|MCP tools| L
+  C[Existing Codex task] -->|CLI or six MCP methods| L[(Local SQLite ledger)]
+  A[Existing Claude session] -->|Six MCP methods| L
   L -->|Codex queue helper| C
-  L -->|Bridge monitor stdout| A
+  L -->|Native Monitor stdout| A
 ```
 
-The ledger is the authority for peer registration, pairings, request IDs, expiry, claims, and replies. Delivery adapters carry a reference to a stored message. The receiving agent fetches and claims that record before acting, keeping a transport notification distinct from accepted work.
+The ledger owns registrations, connection edges, message IDs, expiry, receipts and replies. The `Sessions` facade resolves native identities and exposes the six methods over the existing ledger and adapters. Transport notifications carry a reference to a stored message; the receiver reads that record before acting.
+
+## Native identity and connections
+
+Public addresses are native UUIDs with optional `codex:` / `claude:` prefixes. Known bare UUIDs resolve from local registrations. An unknown bare UUID requires provider clarification; only explicit `codex:UUID` can create a provisional Codex recipient. Connecting is silent. The first send can notify that Codex task, whose targeted eligible read binds it from its own native context without a reciprocal connect.
+
+Codex supplies current identity in `_meta.threadId` per MCP call, or `CODEX_THREAD_ID` in the task's own CLI shell. Claude's hook supplies its current `session_id` per call; its explicit activation command starts a receiver using current skill substitution. A stale MCP startup environment does not identify a new Claude conversation. [Codex MCP source](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/core/src/mcp_tool_call.rs#L506), [Claude hook input](https://code.claude.com/docs/en/hooks#common-input-fields)
+
+Connection edges are explicit and non-transitive. A–B and A–C permit those pairs to exchange messages; they do not connect B–C. `bridge_sessions_list` projects only the invoking session's connected peers. `bridge_disconnect` closes one edge without closing other peers or native sessions.
 
 ## Host adapters
 
-**Codex:** the bridge invokes the public `codex queue --thread <UUID> --message <notification>` command with an argument array. It uses the exact task ID and the ordinary Codex home/configuration. The owning client decides when to consume the queued item. It can remain queued when the task is unloaded or paused. The bridge does not start another app server or resume the target. The interface is present in the published [Codex v0.153.1 queue implementation](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/tui/src/session_queue_commands.rs).
+**Codex:** the adapter invokes `codex queue --thread <UUID> --message <notification>` with an argument array and ordinary Codex home/configuration. The owning client decides when to consume the item. Unloaded or paused tasks can leave it queued. The adapter does not start another app server or resume the target. Queue writes require access to native Codex storage, including the caller's normal sandbox permission flow when invoked from a task shell. [Published queue source](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/ext/queue/src/service.rs)
 
-**Claude Code:** a plugin-owned monitor is a small bridge process. It exposes a local bridge endpoint and emits message references as stdout notifications to its owning Claude session. Its initial notification contains a single-use attachment ticket. The MCP connection redeems that ticket before it can act as the peer. This uses the documented [plugin monitor contract](https://code.claude.com/docs/en/plugins-reference#monitors), without decoding Claude's proprietary native inbox protocol.
+**Claude Code:** `/session-bridge:connect` explicitly starts Claude's native `Monitor` tool running the bridge receiver with the current native session ID. The receiver owns a local endpoint and emits stored-message references to its owning conversation through stdout. It binds its own registration internally; the normal six-method workflow needs no private ticket exchange. There is no automatically started monitor declaration. [Monitor tool](https://code.claude.com/docs/en/tools-reference#monitor-tool), [skill substitutions](https://code.claude.com/docs/en/skills#available-string-substitutions)
 
-The helpers do not coordinate through a central daemon. They share the ledger, and the Claude monitor owns its receiver endpoint. MCP stdout is reserved for MCP; monitor stdout is reserved for notifications. Diagnostic output goes to stderr.
+The helpers share the ledger without a central coordination daemon. MCP stdout is protocol-only; monitor stdout carries notifications; diagnostics use stderr. Native model consumption and wake timing require [live validation](live-validation.md).
 
-## Pairing and authority
+## Scope and authority
 
-A user instructs a session to attach and pair with a specific shareable peer ID. Attachment tickets bind a Claude MCP connection to its own monitor and are separate from public peer IDs. A Codex attachment uses the caller's exact task UUID. Caller identity stays bound to the MCP connection once attached.
+A connection permits messages between selected sessions. It does not grant broader execution, publication, spending or native permission authority. Each request states enough scope for the receiver to evaluate it against the user's task. Status is a self-published one-liner with an update timestamp, not a task assignment or verified activity signal.
 
-Pairing permits messages between those peers. It does not elevate a peer's request above the receiving user's instructions or grant blanket authority to edit, publish, spend, or contact people. Scope each request so the receiver can determine the authorized action. Both ends retain their normal client permissions.
+The shared skill supplies delegation, handoff acceptance, snapshot-bound review and continuation instructions. Native goals or conversation state retain the plan and pending dependencies. There is no bridge goal table, work engine, review subscription, scheduler or cross-agent permission supervisor.
 
-The CLI is a local operator interface: `--self` selects an existing peer. Anyone with access to this OS account and the bridge files already has this authority. The initial design does not isolate mutually untrusted sessions running as the same user.
+The CLI is a local operator interface. Processes with access to this OS account and bridge files already have that authority; native context guards accidental session mix-ups, not mutually untrusted processes under the same account.
 
 ## Message lifecycle
-
-Delivery and work acceptance are separate facts:
 
 | Field or state | Meaning |
 | --- | --- |
 | `stored` | The ledger has the message; submission has not completed. |
 | `dispatching` | An adapter attempt has started. |
-| `submitted` | The adapter reports that it handed off the notification. |
+| `submitted` | The adapter reports handing off the notification. |
 | `unknown` | An attempt may have reached the destination; inspect before retrying. |
-| `acknowledgedAt` / `claimId` | The destination claimed the ledger message. |
-| `answeredBy` | A single recorded reply answers the request. |
+| `acknowledgedAt` | The destination recorded an incoming receipt. |
+| `answeredBy` | One recorded substantive reply answers the request. |
 | `cancelledAt` / `expiresAt` | The request is no longer eligible for new work. |
 
-A request's idempotency key deduplicates local creation. It cannot make a native client queue exactly-once. An adapter crash after native submission can leave an uncertain result, so the bridge does not retry uncertain deliveries automatically.
+Idempotency keys deduplicate local creation. They cannot make native queue delivery or external actions exactly-once. An adapter crash after submission can leave an uncertain result, so the bridge never automatically retries uncertain delivery.
 
-Concurrent claims return the same receipt; repeat calls include `alreadyClaimed: true` so the agent can inspect prior progress before continuing. This cannot guarantee exactly-once external actions. The default claim lease is 30 minutes, capped by message expiry. An expired claim cannot be reclaimed automatically. Inspect abandoned work explicitly and send a new authorized request if recovery is needed. Cancellation, expiry, and disconnection are checked when work is claimed or replied to; they cannot retract a native notification or undo an external action.
+Receipt tokens remain inside the facade. Repeated reads expose prior receipt and reply evidence so the agent can inspect earlier work. Incoming history includes already-read entries; blocked receipts return `actionable: false` and a reason. Selecting an authorized sent message is read-only. A receipt establishes neither work acceptance nor completion.
 
-Only a `request` can receive one substantive `reply`. Acknowledgments update the ledger without waking the sender. `notice` and `reply` are terminal. This bounds a normal exchange without relying on agents to stop an endless acknowledgment loop.
+The default receipt lease is 30 minutes, capped by message expiry. An expired receipt cannot be reclaimed automatically. Cancellation, expiry and disconnection fence new claims and replies; they cannot retract native notifications or undo actions. Recovery requires inspecting what happened before sending a new authorized request.
 
-## Data and distribution
+Only a request can receive one substantive reply. Informational notices and replies are terminal. Use an informational notice for handoff acceptance before the final result; it leaves the request's substantive reply available. Receipts do not wake the sender, preventing acknowledgment-only loops in the transport contract.
 
-The project stores message bodies and metadata locally. It does not read full transcripts, credentials, or provider account tokens. A message body can itself disclose selected project content when the destination model processes it; callers choose what to send.
+## Data and extension boundaries
 
-Client binaries remain unmodified. Integration choices rely on official documentation and published Codex source under its applicable license. The bridge's design is not a legal guarantee for every account, organization, or future product use. Reassess the applicable agreements before offering a hosted service or handling other users' accounts.
+The ledger stores selected message bodies and metadata locally. It does not scan transcripts, synchronize native task databases, read provider credentials or use proprietary client inbox protocols. Message text can still disclose selected content to the receiving model provider.
 
-## Extension boundaries
+New delivery adapters must preserve explicit identity, connection checks and submission uncertainty. Remote relays and actual cloud-session routing are outside this local version. A native UUID is an address within the configured local bridge, not a network route.
 
-Add another host through a delivery adapter with an explicit success/uncertainty result. Preserve the ledger's distinction between transport submission, claim, and completed reply. Keep identity, pairing checks, and message transitions in the ledger rather than reproducing them in each adapter.
-
-Potential later work includes verified live-session compatibility records, a human pairing/status UI, opt-in delivery reconciliation, and richer artifact references. Remote relays, autonomous multi-hop delegation, transcript replication, and proprietary client IPC are outside this implementation.
+The default catalog has six methods; `--legacy-tools` selects the old catalog only for the v0.2 migration window. Legacy CLI operations retain diagnostics, exceptional cancellation and full receiver shutdown. [Operator recovery](support.md#operator-recovery)

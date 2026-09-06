@@ -1,18 +1,25 @@
 # Session Bridge
 
-Connect Codex and Claude Code sessions that are already running. A session can pair with multiple peers, including peers of the same provider. Share peer IDs, send bounded requests to selected peers, and get replies in the original conversations.
+Connect existing Codex and Claude Code sessions by their native IDs. Each session can connect to multiple peers, publish a short “working on” line, and exchange bounded messages in its original conversation.
 
-The bridge keeps a local message ledger and uses the clients' existing delivery mechanisms: Codex's `queue` command and Claude Code's plugin monitors. It does not launch or resume model sessions. Small MCP and monitor helpers run alongside your clients; Codex delivery uses a brief CLI helper. Model authentication and usage remain with the official clients.
+The bridge keeps a local message ledger and delivers through Codex's `queue` command and Claude Code's native `Monitor` tool. It does not launch or resume model sessions. Small MCP and receiver helpers run alongside your clients; Codex delivery uses a brief CLI helper. Goals, tasks, model authentication and permissions stay with the official clients.
 
-**Status:** private, early implementation for one user on one machine. The automated suite exercises the ledger, transports, and MCP with isolated test clients. Real model sessions have not yet been exercised for idle, busy, approval, or restart behavior. See [support and validation](docs/support.md) before relying on unattended delivery.
+**Status:** the six-method interface, native session addressing, explicit Claude activation and self-status are implemented for one OS user on one machine. Automated checks exercise isolated clients and state. Native idle, busy and restart behavior needs separate evidence; see the [live validation record](docs/live-validation.md) and [support guide](docs/support.md).
 
-**Simplified next design:** [visual plan](docs/collaboration-v2.html) · [implementation plan](docs/collaboration-v2.md) · [six-method interface](docs/plugin-methods.md). Connect existing sessions by native ID, exchange messages, and share a short status. Goals and tasks stay native; collaboration belongs in the shared skill. Explicit Claude activation is available now.
+| MCP method | Purpose |
+| --- | --- |
+| `bridge_connect` | Connect to a selected native session ID. |
+| `bridge_sessions_list` | List your connected peers and their latest status. |
+| `bridge_status_update` | Publish your own one-line status. |
+| `bridge_message_send` | Send a request, informational update or reply. |
+| `bridge_messages_read` | Read incoming messages or inspect an exchange. |
+| `bridge_disconnect` | Disconnect one peer; leave other connections intact. |
 
-The six-method facade, native-ID connection and status updates are not yet registered in the plugin. There is no planned bridge-owned goal/work engine or automatic permission supervisor. Current multi-peer behavior has been checked in an isolated ledger experiment; live multi-session delivery remains unverified.
+[Visual guide](docs/collaboration-v2.html) · [Method contract](docs/plugin-methods.md) · [Collaboration design](docs/collaboration-v2.md)
 
 ## Build
 
-Requires Node.js 24+, npm, Codex with `codex queue`, and interactive Claude Code with plugin monitors available. Both clients must run as the same OS user and use the same bridge data directory. Data defaults to `~/.local/state/session-bridge`; use `SESSION_BRIDGE_HOME` or CLI `--home /absolute/path` to select another private local directory. Apply the same choice to both clients and every bridge helper.
+Requires Node.js 24+, npm, Codex with `codex queue`, and interactive Claude Code with `Monitor` available. Both clients and all bridge helpers must use the same OS account and bridge data directory. Data defaults to `~/.local/state/session-bridge`; `SESSION_BRIDGE_HOME` or CLI `--home /absolute/path` selects another private local directory.
 
 ```bash
 gh repo clone ItamarRocha/session-bridge
@@ -22,13 +29,11 @@ npm run verify
 node dist/cli.js doctor
 ```
 
-Keep this checkout in a durable location. The plugin runs the built `dist/cli.js` and uses the installed `node_modules`; these are generated locally and are not checked into Git. Rebuild after updating the source.
+Keep this checkout in a durable location. The plugin needs the locally built `dist/cli.js` and installed `node_modules`; rebuild after updating source. Building does not change client configuration.
 
-## Connect two open sessions
+## Connect from an existing Claude session
 
-### 1. Load the bridge in Claude Code
-
-From the built checkout, make it a personal Claude plugin:
+From the built checkout, install the personal Claude plugin:
 
 ```bash
 bridge_project="$PWD"
@@ -36,63 +41,50 @@ mkdir -p "$HOME/.claude/skills"
 ln -s "$bridge_project" "$HOME/.claude/skills/session-bridge"
 ```
 
-This command deliberately fails if that destination already exists. Inspect an existing installation before updating it. It does not replace a plugin or edit project settings.
+The symlink command fails if that destination already exists. Inspect an existing installation before updating it.
 
-In the **existing Claude session**, run `/reload-plugins` to load the plugin, then explicitly run `/session-bridge:connect` when you want to activate the bridge. Opening another Claude terminal leaves its bridge dormant. The connect command starts the monitor and posts a private attachment ticket into that conversation. Claude uses that ticket with `bridge_attach` and returns an `sb_...` ID. Share that ID with Codex. The attachment ticket stays in the Claude conversation; it is not the pairing code.
+In the existing Claude conversation, run `/reload-plugins`, then `/session-bridge:connect` when you want to activate its receiver. Opening another terminal or loading the plugin leaves its bridge dormant. The command uses Claude's native `Monitor` tool with this conversation's current native ID; a `PreToolUse` hook supplies that ID freshly for each bridge tool call. Users and models no longer exchange private attachment tickets. See Claude's [Monitor tool](https://code.claude.com/docs/en/tools-reference#monitor-tool), [skill substitutions](https://code.claude.com/docs/en/skills#available-string-substitutions) and [hook input](https://code.claude.com/docs/en/hooks#common-input-fields).
 
-Personal plugin loading and monitors triggered by skill invocation are documented by [Claude Code](https://code.claude.com/docs/en/plugins-reference#monitors). Monitor availability varies by host and configuration; [the support guide](docs/support.md#claude-code) lists the constraints. If no notification arrives after the connect command, inspect the plugin errors and task panel before trying to attach. Monitors already running from an older installation remain running until explicitly stopped or the session exits.
+You can supply a destination immediately:
 
-### 2. Attach the open Codex task
-
-An existing Codex task can use the CLI through its shell tool immediately. Ask it to read `skills/session-bridge/SKILL.md` from this checkout, then run the following **inside that task's shell tool**, replacing the absolute path:
-
-```bash
-node /absolute/path/session-bridge/dist/cli.js attach \
-  --host codex --session-id "$CODEX_THREAD_ID" --label "Implementation"
+```text
+/session-bridge:connect codex:YOUR_CODEX_TASK_UUID
 ```
 
-The result contains this task's own `sb_...` peer ID. Use the exact native task UUID from its own environment; an empty or guessed ID cannot identify the intended task.
+Use `codex:UUID` for a Codex task that has not used the bridge yet. Connecting stores a pending connection silently. Claude's first message queues a notification to that task; the target can read it from its own shell and bind the connection without a reciprocal connect or MCP reload. Delivery still depends on the owning Codex client consuming its native queue. A UUID does not open an unloaded task. [Codex queue source](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/ext/queue/src/service.rs)
 
-This route does not require a new Codex task or loading an MCP server into the active task. For MCP tools in future tasks, use [optional Codex installation](#optional-codex-mcp-installation).
+An already registered peer accepts its bare UUID, or a `codex:` / `claude:` prefix. An unknown bare UUID returns `activation_required`; the bridge does not guess its provider. An inactive Claude target must first run `/session-bridge:connect` in that conversation. A UUID alone is not a route to another machine.
 
-### 3. Pair and send
+## Use an existing Codex task without reloading tools
 
-Give Codex the Claude peer ID and a concrete task:
-
-> Pair this task with `sb_…`. Ask it to review the proposed change in `/absolute/path/to/file`. Request findings only and leave file edits to this task.
-
-The equivalent CLI calls are below. Replace the example IDs with the returned IDs. The bridge stores your explicit message body; it does not collect conversation history or attach files automatically.
+Ask the task to read `skills/session-bridge/SKILL.md` from the checkout. It can use the CLI through its existing shell tool; caller identity comes from that task's own `CODEX_THREAD_ID`.
 
 ```bash
-node /absolute/path/session-bridge/dist/cli.js pair \
-  --self sb_CODEX --peer sb_CLAUDE
+node /absolute/path/session-bridge/dist/cli.js connect \
+  --host codex --target claude:CLAUDE_SESSION_UUID
 
-node /absolute/path/session-bridge/dist/cli.js send \
-  --self sb_CODEX --peer sb_CLAUDE \
-  --body "Review /absolute/path/to/file for correctness. Return findings only." \
-  --key review-001
+node /absolute/path/session-bridge/dist/cli.js message-send \
+  --host codex --target claude:CLAUDE_SESSION_UUID \
+  --body-file /absolute/path/review-request.txt --key review-001
+
+node /absolute/path/session-bridge/dist/cli.js sessions --host codex
 ```
 
-Use `--body-file /absolute/path/request.txt` for longer requests. Repeating the same key and request returns the same ledger message; changing a request requires a new key. An ambiguous transport result is never an invitation to resend blindly.
+Replace placeholders with actual native UUIDs and file paths. A request should name the desired result, relevant snapshot and execution limits. The bridge stores only the message you provide; it does not copy transcripts or attach file contents automatically.
 
-The receiving session claims the message with `bridge_receive`, completes the authorized request, then calls `bridge_reply` with its claim ID. A reply returns to the original Codex task through its native queue. The bundled skill supplies this workflow to both agents. `notice` messages and replies are terminal; acknowledgments do not create another model turn.
+On notification, the destination uses `bridge_messages_read({messageId})`, completes the authorized request, then sends its one substantive result with `bridge_message_send({sessionId,text,idempotencyKey,replyTo})`. `sessionId` identifies the original sender and `replyTo` the original request. Receipt tokens stay internal. Use `expectsReply: false` for an informational update, such as handoff acceptance. Notices and replies need no courtesy response.
 
-## Check or stop an exchange
-
-All CLI results are JSON. The same operations are exposed as MCP tools after attachment.
+## Inspect or disconnect
 
 ```bash
-node dist/cli.js peers
-node dist/cli.js status --self sb_CODEX
-node dist/cli.js status --self sb_CODEX --message msg_ID
-node dist/cli.js cancel --self sb_CODEX --message msg_ID
-node dist/cli.js disconnect --self sb_CODEX --pairing pair_ID
-node dist/cli.js stop --self sb_CODEX
+node dist/cli.js status-update --host codex --text "Reviewing the parser change."
+node dist/cli.js messages-read --host codex --message MESSAGE_ID
+node dist/cli.js disconnect --host codex --target PEER_SESSION_UUID
 ```
 
-Read IDs from command output; the illustrative values above are not valid identities. `cancel` closes an individual request, `disconnect` closes a pairing, and `stop` closes the peer. They cannot undo work already performed. Stopping a bridge peer does not stop its model session.
+Incoming history includes previously read messages and receipt evidence. Inspect that evidence before repeating side effects. Selecting a sent message is read-only. `submitted` means the adapter handed off a notification; a receipt and a substantive reply are separate facts. An `unknown` outcome requires inspection, not an automatic resend. [Message lifecycle](docs/design.md#message-lifecycle)
 
-`submitted` means a transport accepted the wake-up attempt. `acknowledgedAt` means the destination explicitly claimed the message. `answeredBy` identifies its recorded reply. An `unknown` delivery outcome needs inspection; it is not automatically retried. [The lifecycle](docs/design.md#message-lifecycle) explains these distinctions.
+Status is a timestamped self-report, not proof that a model is currently running. Disconnecting one peer fences pending bridge work on that connection; it does not undo completed actions or stop either native session.
 
 ## Optional Codex MCP installation
 
@@ -105,17 +97,16 @@ mkdir -p "$HOME/.agents/skills"
 ln -s "$bridge_project/skills/session-bridge" "$HOME/.agents/skills/session-bridge"
 ```
 
-These are installation commands for you to run; building the repository does not change your client configuration. Follow the host's refresh or session-start flow, then confirm that `bridge_attach` is available. Codex's documented plugin installation flow uses a [new conversation](https://learn.chatgpt.com/docs/plugins); use the CLI route above for an already running task that cannot reload tools.
+Follow the host's refresh or session-start flow, then confirm the six methods above are available. The pinned Codex client sends current task identity in each MCP call's `_meta.threadId`; the bridge requires that fresh identity and never falls back to startup identity. If fresh native context is unavailable, use the CLI from the current task's shell. [Codex MCP call source](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/core/src/mcp_tool_call.rs#L506)
 
-Ask the agent to attach with its exact native task UUID. The MCP process is bound to one peer, so other tools do not take a caller-supplied `self` ID. The `.codex-plugin` package is also included for a personal marketplace installation. Its MCP configuration uses a plugin-relative working directory; a marketplace copy must include the locally built output and installed dependencies.
+The `.codex-plugin` package also supports a personal marketplace installation. A packaged copy must include the locally built output and installed dependencies. Its MCP working directory is relative to the plugin root.
 
-## Scope
+## Compatibility and scope
 
-- Pair only sessions you control, with a specific request and a clear owner for file changes.
-- Keep the bridge's data directory local to this OS account. Local CLI access is operator authority, not a security boundary against other programs running as you.
-- Messages can contain private project content. Only include material the other model provider is allowed to process.
-- Client permissions, usage limits, and organizational controls still apply. This project does not modify clients or their account credentials and does not implement proprietary inbox protocols.
+The default MCP catalog contains six methods. `mcp --host codex|claude --legacy-tools` explicitly opts into the old ten-tool catalog for the v0.2 migration window. Legacy CLI operations remain available for diagnostics, exceptional cancellation and full receiver shutdown; see [operator recovery](docs/support.md#operator-recovery). Existing `sb_…` IDs remain internal/operator identifiers, not the new public session address.
 
-[Architecture](docs/design.md) · [Support and validation](docs/support.md) · [Agent workflow](skills/session-bridge/SKILL.md)
+Connect only sessions within the user's authorized scope. Connections do not grant broader task or native permission authority. Local CLI access is operator authority under this OS account, not isolation against other processes running as you. Message contents may be processed by the receiving model provider. No bridge goal engine, workflow scheduler or automatic permission supervisor is included.
+
+[Architecture](docs/design.md) · [Support and validation](docs/support.md) · [Shared skill](skills/session-bridge/SKILL.md)
 
 Private project. `UNLICENSED`; no public distribution license is granted.
