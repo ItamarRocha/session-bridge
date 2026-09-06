@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { Store } from '../src/store.js';
 
-const NATIVE_ID = '01a07056-03b8-77b1-864a-470e8dcece14';
+const NATIVE_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 
 function fixture(t: TestContext) {
   const home = mkdtempSync(join(tmpdir(), 'session-bridge-store-'));
@@ -52,6 +52,220 @@ test('peer registration validates native Codex identity and bounded labels', (t)
   assert.throws(() => store.createPeer({ host: 'claude', label: '  ' }), /Label/);
   assert.throws(() => store.createPeer({ host: 'claude', label: 'x'.repeat(129) }), /Label/);
   assert.throws(() => store.createPeer({ host: 'claude', label: 'x', endpoint: '\0bad' }), /Endpoint/);
+  assert.throws(() => store.createPeer({ host: 'claude', label: 'x', nativeSessionId: 'not-a-session' }), /UUID/);
+});
+
+test('Codex native attachment reuse preserves identity and connections without silently attaching a target', (t) => {
+  const f = fixture(t);
+  const status = f.store.updateStatus(f.a.id, 'Reviewing the current change');
+  const reused = f.open().ensureCodexPeer({ nativeSessionId: NATIVE_ID, label: 'New label', attach: false });
+  assert.deepEqual(reused, status);
+  assert.equal(f.store.peers().length, 3);
+  assert.equal(f.store.pairings(reused.id)[0]!.id, f.pair.id);
+  assert.equal(f.store.attach(f.ticket).attachedAt, 1_000_000);
+  assert.throws(() => f.store.attach(f.ticket), /already used/);
+  assert.throws(() => f.store.createPeer({ host: 'codex', nativeSessionId: NATIVE_ID, label: 'Duplicate' }), /already has an active peer/);
+  f.store.closePeer(reused.id);
+  const fresh = f.store.ensureCodexPeer({ nativeSessionId: NATIVE_ID, label: 'Reconnected Codex' });
+  assert.equal(fresh.id, reused.id);
+  assert.equal(f.store.findNativePeer(NATIVE_ID)?.id, fresh.id);
+  assert.deepEqual(f.store.connectedPeers(fresh.id), []);
+  assert.equal(f.store.ensureCodexPeer({ nativeSessionId: NATIVE_ID, label: 'Ignored' }).id, fresh.id);
+});
+
+test('a provisional Codex target becomes attached only when that caller binds and invalidates a pending ticket', (t) => {
+  const f = fixture(t);
+  const nativeSessionId = '00000000-1111-2222-3333-444444444444';
+  const target = f.store.ensureCodexPeer({ nativeSessionId, label: 'Target', attach: false });
+  assert.equal(target.attachedAt, null);
+  f.advance(1000);
+  const caller = f.open().ensureCodexPeer({ nativeSessionId, label: 'Caller' });
+  assert.equal(caller.id, target.id);
+  assert.equal(caller.attachedAt, 1_001_000);
+  f.advance(1000);
+  assert.equal(f.store.ensureCodexPeer({ nativeSessionId, label: 'Again' }).attachedAt, caller.attachedAt);
+  assert.equal(f.store.ensureCodexPeer({ nativeSessionId: NATIVE_ID, label: 'Native attachment' }).attachedAt, 1_002_000);
+  assert.throws(() => f.store.attach(f.ticket), /already used/);
+});
+
+test('native lookup is exact and read only, reports provider ambiguity, and preserves a live Claude endpoint', (t) => {
+  const f = fixture(t);
+  const claude = f.store.createPeer({ host: 'claude', nativeSessionId: NATIVE_ID, label: 'Claude', endpoint: '/private/tmp/claude.sock' });
+  assert.throws(() => f.store.findNativePeer(NATIVE_ID), /ambiguous/);
+  assert.equal(f.store.findNativePeer(NATIVE_ID, 'codex')!.id, f.a.id);
+  assert.equal(f.store.findNativePeer(NATIVE_ID, 'claude')!.id, claude.peer.id);
+  assert.throws(() => f.open().createPeer({ host: 'claude', nativeSessionId: NATIVE_ID, label: 'Replacement', endpoint: '/private/tmp/replacement.sock' }), /already has an active peer/);
+  assert.equal(f.store.peer(claude.peer.id).endpoint, '/private/tmp/claude.sock');
+  assert.equal(f.store.attach(claude.ticket).id, claude.peer.id);
+  assert.throws(() => f.store.attach(claude.ticket), /already used/);
+  const before = f.store.peers();
+  assert.equal(f.store.findNativePeer('00000000-1111-2222-3333-444444444444'), null);
+  assert.deepEqual(f.store.peers(), before);
+  assert.throws(() => f.store.findNativePeer(NATIVE_ID.slice(0, 8)), /UUID/);
+  f.store.closePeer(claude.peer.id);
+  assert.equal(f.store.findNativePeer(NATIVE_ID)!.id, f.a.id);
+});
+
+test('native UUID casing cannot create a second identity or prevent an existing attachment from being reused', (t) => {
+  const f = fixture(t);
+  assert.equal(f.store.findNativePeer(NATIVE_ID.toUpperCase(), 'codex')!.id, f.a.id);
+  assert.equal(f.store.ensureCodexPeer({ nativeSessionId: NATIVE_ID.toUpperCase() }).id, f.a.id);
+  assert.throws(() => f.store.createPeer({ host: 'codex', nativeSessionId: NATIVE_ID.toUpperCase(), label: 'Duplicate' }), /already has an active peer/);
+  const claude = f.store.createPeer({ host: 'claude', nativeSessionId: NATIVE_ID.toUpperCase(), label: 'Claude' }).peer;
+  assert.equal(claude.nativeSessionId, NATIVE_ID);
+  assert.equal(f.store.findNativePeer(NATIVE_ID, 'claude')!.id, claude.id);
+  assert.throws(() => f.store.createPeer({ host: 'claude', nativeSessionId: NATIVE_ID, label: 'Duplicate Claude' }), /already has an active peer/);
+  const nativeSessionId = 'AAAAAAAA-1111-2222-3333-444444444444';
+  const codex = f.store.ensureCodexPeer({ nativeSessionId });
+  assert.equal(codex.nativeSessionId, nativeSessionId.toLowerCase());
+  assert.equal(f.store.findNativePeer(nativeSessionId.toLowerCase(), 'codex')!.id, codex.id);
+});
+
+test('connected summaries isolate each caller and disconnecting one edge preserves other same-provider peers', (t) => {
+  const f = fixture(t);
+  const otherCodex = f.store.ensureCodexPeer({ nativeSessionId: '00000000-1111-2222-3333-444444444444', label: 'Another Codex' });
+  const secondPair = f.store.pair(f.a.id, otherCodex.id);
+  f.store.pair(f.b.id, f.c.id);
+  const connected = f.store.connectedPeers(f.a.id);
+  assert.deepEqual(new Set(connected.map(({ peer }) => peer.id)), new Set([f.b.id, otherCodex.id]));
+  assert.deepEqual(connected.find(({ peer }) => peer.id === f.b.id)!.pairing, f.pair);
+  f.store.disconnect(f.a.id, f.pair.id);
+  assert.deepEqual(f.store.connectedPeers(f.a.id), [{ peer: otherCodex, pairing: secondPair }]);
+  assert.deepEqual(f.store.connectedPeers(f.b.id).map(({ peer }) => peer.id), [f.c.id]);
+  const message = f.store.send(f.a.id, { to: otherCodex.id, body: 'Still connected', idempotencyKey: 'second-codex' });
+  assert.equal(f.store.inbox(otherCodex.id)[0]!.id, message.id);
+  f.store.closePeer(otherCodex.id);
+  assert.deepEqual(f.store.connectedPeers(f.a.id), []);
+  assert.throws(() => f.store.connectedPeers(otherCodex.id), /closed/);
+});
+
+test('one-line status is durable attributed metadata with an honest timestamp and no message side effect', (t) => {
+  const f = fixture(t);
+  assert.equal(f.a.statusText, null);
+  assert.equal(f.a.statusUpdatedAt, null);
+  const updated = f.store.updateStatus(f.b.id, '  Running benchmark B  ');
+  assert.equal(updated.id, f.b.id);
+  assert.equal(updated.statusText, 'Running benchmark B');
+  assert.equal(updated.statusUpdatedAt, 1_000_000);
+  f.advance(600_000);
+  assert.equal(f.open().connectedPeers(f.a.id)[0]!.peer.statusUpdatedAt, 1_000_000);
+  assert.equal(f.store.peer(f.a.id).statusText, null);
+  assert.deepEqual(f.store.history(f.a.id), []);
+  const next = f.store.updateStatus(f.b.id, 'Waiting for permission');
+  assert.equal(next.statusUpdatedAt, 1_600_000);
+  for (const invalid of ['', ' ', 'a\nb', 'a\rb', 'a\u2028b', '\0bad', '😀'.repeat(129)]) {
+    assert.throws(() => f.store.updateStatus(f.b.id, invalid), /Status/);
+  }
+  assert.equal(f.store.peer(f.b.id).statusText, 'Waiting for permission');
+  f.store.closePeer(f.b.id);
+  assert.throws(() => f.store.updateStatus(f.b.id, 'Running again'), /closed/);
+});
+
+test('schema migration preserves tickets and message evidence and does not silently merge legacy native duplicates', (t) => {
+  const f = fixture(t);
+  const original = f.send();
+  const claim = f.store.claim(f.b.id, original.id);
+  f.store.close();
+  const legacy = new DatabaseSync(join(f.home, 'bridge.sqlite'));
+  legacy.exec(`ALTER TABLE peers DROP COLUMN status_text;
+    ALTER TABLE peers DROP COLUMN status_updated_at;
+    ALTER TABLE peers DROP COLUMN receiver_owner;
+    ALTER TABLE peers DROP COLUMN receiver_checked_at;
+    ALTER TABLE peers DROP COLUMN receiver_expires_at;
+    ALTER TABLE messages DROP COLUMN notified_at;
+    ALTER TABLE messages DROP COLUMN notified_by;
+    PRAGMA user_version=1;`);
+  legacy.prepare('UPDATE peers SET native_session_id=? WHERE id=?').run(NATIVE_ID.toUpperCase(), f.a.id);
+  legacy.prepare(`INSERT INTO peers(id,host,label,native_session_id,created_at)
+    VALUES('legacy-duplicate','codex','Duplicate native registration',?,?)`).run(NATIVE_ID, 1_000_000);
+  legacy.close();
+  const migrated = f.open();
+  assert.equal(migrated.peer(f.a.id).statusText, null);
+  assert.equal(migrated.peer(f.a.id).statusUpdatedAt, null);
+  assert.equal(migrated.attach(f.ticket).id, f.a.id);
+  assert.deepEqual(migrated.message(f.a.id, original.id), claim.message);
+  assert.equal(migrated.pairings(f.a.id)[0]!.id, f.pair.id);
+  assert.throws(() => migrated.findNativePeer(NATIVE_ID, 'codex'), /ambiguous/);
+  assert.throws(() => migrated.ensureCodexPeer({ nativeSessionId: NATIVE_ID, label: 'Codex' }), /ambiguous/);
+  migrated.closePeer('legacy-duplicate');
+  assert.equal(migrated.findNativePeer(NATIVE_ID, 'codex')!.id, f.a.id);
+  const again = f.open();
+  assert.throws(() => again.attach(f.ticket), /already used/);
+  assert.equal(again.message(f.b.id, original.id).claimId, claim.claimId);
+});
+
+test('schema two historical native aliases retain receipts and idempotency without reviving old connections', (t) => {
+  const f = fixture(t);
+  const nativeB = 'bbbbbbbb-1111-4222-8333-444444444444';
+  const setup = new DatabaseSync(join(f.home, 'bridge.sqlite'));
+  setup.prepare('UPDATE peers SET native_session_id=? WHERE id=?').run(nativeB, f.b.id);
+  setup.close();
+  const request = f.send();
+  const receipt = f.store.claim(f.b.id, request.id);
+  const result = f.store.reply(f.b.id, request.id, receipt.claimId, 'Original result', 'reply-key');
+  f.store.closePeer(f.a.id);
+  f.store.closePeer(f.b.id);
+  f.store.close();
+
+  const legacy = new DatabaseSync(join(f.home, 'bridge.sqlite'));
+  legacy.exec(`ALTER TABLE peers DROP COLUMN receiver_owner;
+    ALTER TABLE peers DROP COLUMN receiver_checked_at;
+    ALTER TABLE peers DROP COLUMN receiver_expires_at;
+    ALTER TABLE messages DROP COLUMN notified_at;
+    ALTER TABLE messages DROP COLUMN notified_by;
+    PRAGMA user_version=2;`);
+  for (const [id, host, nativeId] of [
+    ['sb_current_a', 'codex', NATIVE_ID.toUpperCase()], ['sb_current_b', 'claude', nativeB],
+  ]) {
+    legacy.prepare(`INSERT INTO peers(id,host,label,native_session_id,created_at,attached_at)
+      VALUES(?,?, 'Reactivated native session',?,1000001,1000001)`).run(id!, host!, nativeId!);
+  }
+  legacy.close();
+
+  const store = f.open();
+  const a = store.findNativePeer(NATIVE_ID, 'codex')!, b = store.findNativePeer(nativeB, 'claude')!;
+  assert.equal(store.sameSession(a.id, f.a.id), true);
+  assert.equal(store.sameSession(b.id, f.b.id), true);
+  assert.equal(store.message(a.id, request.id).claimId, receipt.claimId);
+  assert.equal(store.message(b.id, request.id).answeredBy, result.id);
+  assert.deepEqual(store.incoming(a.id).map(message => message.id), [result.id]);
+  assert.deepEqual(store.incoming(b.id).map(message => message.id), [request.id]);
+  assert.deepEqual(new Set(store.history(a.id).map(message => message.id)), new Set([request.id, result.id]));
+  assert.equal(store.send(a.id, {to: b.id, body: request.body, idempotencyKey: 'request-1'}).id, request.id);
+  assert.equal(store.reply(b.id, request.id, receipt.claimId, result.body, 'reply-key').id, result.id);
+  assert.throws(() => store.send(a.id, {to: b.id, body: 'Changed request', idempotencyKey: 'request-1'}), /different message input/);
+  assert.throws(() => store.claim(b.id, request.id), /disconnected/);
+  assert.equal(store.beginDelivery(request.id), false);
+  const freshPair = store.pair(a.id, b.id);
+  assert.notEqual(freshPair.id, request.pairingId);
+  const cancelled = store.cancel(a.id, request.id);
+  assert.equal(store.send(a.id, {to: b.id, body: request.body, idempotencyKey: 'request-1'}).cancelledAt, cancelled.cancelledAt);
+  assert.equal(store.beginDelivery(request.id), false);
+  assert.equal(store.send(a.id, {to: b.id, body: 'Fresh request', idempotencyKey: 'new-request'}).pairingId, freshPair.id);
+  const sameUuidOtherProvider = store.ensureCodexPeer({nativeSessionId: nativeB});
+  assert.equal(store.sameSession(sameUuidOtherProvider.id, b.id), false);
+  assert.throws(() => store.message(sameUuidOtherProvider.id, request.id), /participant/);
+  const version = new DatabaseSync(join(f.home, 'bridge.sqlite'));
+  assert.equal(version.prepare('PRAGMA user_version').get()!.user_version, 3);
+  version.close();
+  assert.equal(f.open().message(a.id, request.id).claimId, receipt.claimId);
+});
+
+test('conflicting historical idempotency keys fail closed without overwriting either exchange', (t) => {
+  const f = fixture(t);
+  const first = f.send();
+  const legacy = new DatabaseSync(join(f.home, 'bridge.sqlite'));
+  legacy.prepare(`INSERT INTO peers(id,host,label,native_session_id,created_at,closed_at)
+    VALUES('sb_old_a','codex','Old registration',?,1,2)`).run(NATIVE_ID);
+  const [a, b] = ['sb_old_a', f.b.id].sort();
+  legacy.prepare(`INSERT INTO pairings(id,a,b,created_at,closed_at) VALUES('pair_old',?,?,1,2)`).run(a!, b!);
+  legacy.prepare(`INSERT INTO messages(id,pairing_id,from_peer,to_peer,kind,body,created_at,expires_at,idempotency_key)
+    VALUES('msg_old','pair_old','sb_old_a',?,'request','Different earlier operation',1,3600001,'request-1')`).run(f.b.id);
+  legacy.close();
+  assert.throws(() => f.send(), /conflicting historical messages/);
+  assert.equal(f.store.message(f.a.id, first.id).body, first.body);
+  assert.equal(f.store.message(f.a.id, 'msg_old').body, 'Different earlier operation');
+  assert.equal(f.store.history(f.a.id).length, 2);
 });
 
 test('pairing is symmetric and idempotent and rejects missing or closed peers', (t) => {
@@ -104,7 +318,7 @@ test('only message participants can inspect and only recipient can claim', (t) =
   assert.equal(f.store.message(f.b.id, message.id).id, message.id);
 });
 
-test('competing claimers get one persisted claim, with no automatic reclaim after expiry', (t) => {
+test('competing readers retain the original receipt after its historical lease deadline', (t) => {
   const f = fixture(t);
   const message = f.send();
   const second = f.open();
@@ -114,10 +328,29 @@ test('competing claimers get one persisted claim, with no automatic reclaim afte
   assert.equal(f.store.inbox(f.b.id).length, 0);
   assert.equal(claim.message.acknowledgedAt, 1_000_000);
   f.advance(10_000);
-  assert.throws(() => second.claim(f.b.id, message.id), /automatic re-claim is disabled/);
-  assert.throws(() => f.store.reply(f.b.id, message.id, claim.claimId, 'Too late'), /lease expired/);
+  assert.deepEqual(second.claim(f.b.id, message.id), {...claim, alreadyClaimed: true});
+  const reply = f.store.reply(f.b.id, message.id, claim.claimId, 'Completed result');
+  assert.equal(reply.replyTo, message.id);
   assert.equal(f.store.message(f.a.id, message.id).claimId, claim.claimId);
-  assert.equal(f.store.message(f.a.id, message.id).answeredBy, null);
+  assert.equal(f.store.message(f.a.id, message.id).answeredBy, reply.id);
+});
+
+test('a result after thirty one minutes retains its receipt while the one hour message deadline still fences work', (t) => {
+  const f = fixture(t);
+  const request = f.send();
+  const receipt = f.store.claim(f.b.id, request.id);
+  const pending = f.send('Still awaiting a receiver', 'pending');
+  f.advance(31 * 60 * 1000);
+  const reopened = f.open();
+  assert.deepEqual(reopened.claim(f.b.id, request.id), {...receipt, alreadyClaimed: true});
+  const reply = reopened.reply(f.b.id, request.id, receipt.claimId, 'Completed investigation', 'result');
+  assert.equal(reply.replyTo, request.id);
+  assert.equal(reopened.message(f.a.id, request.id).acknowledgedAt, receipt.message.acknowledgedAt);
+  f.advance(29 * 60 * 1000);
+  assert.throws(() => reopened.claim(f.b.id, request.id), /expired/);
+  assert.throws(() => reopened.claim(f.b.id, pending.id), /expired/);
+  assert.equal(reopened.beginDelivery(pending.id), false);
+  assert.equal(reopened.message(f.b.id, request.id).claimId, receipt.claimId);
 });
 
 test('request TTL fences receipt, dispatch, and replies and caps claim lifetime', (t) => {
@@ -154,6 +387,27 @@ test('one reply is committed atomically, retries return it, and replies cannot p
   assert.equal(f.store.reply(f.b.id, request.id, claim.claimId, reply.body).id, reply.id);
 });
 
+test('reply idempotency is durable and rejects key reuse across requests, notices and replies', (t) => {
+  const f = fixture(t);
+  const first = f.send();
+  const claim = f.store.claim(f.b.id, first.id);
+  f.store.send(f.b.id, { to: f.a.id, body: 'Progress update', kind: 'notice', idempotencyKey: 'notice-key' });
+  assert.throws(() => f.store.reply(f.b.id, first.id, claim.claimId, 'Result', 'notice-key'), /different message input/);
+  assert.throws(() => f.store.reply(f.b.id, first.id, claim.claimId, 'Result', ' '), /Idempotency key/);
+  const result = f.store.reply(f.b.id, first.id, claim.claimId, 'Result', 'result-key');
+  assert.deepEqual(f.open().reply(f.b.id, first.id, claim.claimId, 'Result', 'result-key'), result);
+  assert.throws(() => f.store.reply(f.b.id, first.id, claim.claimId, 'Changed result', 'result-key'), /different message input/);
+  assert.throws(() => f.store.reply(f.b.id, first.id, claim.claimId, 'Result', 'second-key'), /different idempotency key/);
+  assert.throws(() => f.store.send(f.b.id, { to: f.a.id, body: 'Follow up', idempotencyKey: 'result-key' }), /different message input/);
+  const second = f.send('Another request', 'another-request');
+  const secondClaim = f.store.claim(f.b.id, second.id);
+  assert.throws(() => f.store.reply(f.b.id, second.id, secondClaim.claimId, 'Result', 'result-key'), /different message input/);
+  const legacy = f.store.reply(f.b.id, second.id, secondClaim.claimId, 'Legacy result');
+  assert.deepEqual(f.store.reply(f.b.id, second.id, secondClaim.claimId, 'Legacy result', 'legacy-result-key'), legacy);
+  assert.deepEqual(f.open().reply(f.b.id, second.id, secondClaim.claimId, 'Legacy result', 'legacy-result-key'), legacy);
+  assert.equal(f.store.history(f.b.id).filter(({ kind }) => kind === 'reply').length, 2);
+});
+
 test('cancellation is sender-only, idempotent, and fences new claims and replies', (t) => {
   const f = fixture(t);
   const message = f.send();
@@ -187,7 +441,8 @@ test('disconnect fences pending actions and re-pairing never revives old message
   const nextPair = f.store.pair(f.a.id, f.b.id);
   assert.notEqual(nextPair.id, f.pair.id);
   assert.equal(f.store.inbox(f.b.id).length, 0);
-  assert.throws(() => f.send(), /disconnected/);
+  assert.equal(f.send().id, request.id);
+  assert.equal(f.store.beginDelivery(request.id), false);
   assert.equal(f.send('new after reconnect', 'new').pairingId, nextPair.id);
 });
 
@@ -318,4 +573,56 @@ test('history provides bounded recent recovery records in both directions, inclu
   for (const limit of [0, -1, 101, 1.5, NaN]) assert.throws(() => f.store.history(f.a.id, limit), /History limit/);
   f.store.closePeer(f.a.id);
   assert.equal(f.store.history(f.a.id).length, 4);
+});
+
+test('incoming recovery preserves previously received and terminal messages without including sent messages', (t) => {
+  const f = fixture(t);
+  const received = f.send();
+  const claim = f.store.claim(f.b.id, received.id);
+  f.advance(1000);
+  const outgoing = f.store.reply(f.b.id, received.id, claim.claimId, 'Result');
+  f.advance(1000);
+  const cancelled = f.send('Cancelled request', 'cancelled-recovery');
+  f.store.cancel(f.a.id, cancelled.id);
+  f.advance(1000);
+  const expired = f.store.send(f.a.id, { to: f.b.id, body: 'Expired request', ttlSeconds: 1, idempotencyKey: 'expired-recovery' });
+  f.advance(1000);
+  assert.deepEqual(f.store.inbox(f.b.id), []);
+  assert.deepEqual(f.open().incoming(f.b.id).map(({ id }) => id), [received.id, cancelled.id, expired.id]);
+  assert.equal(f.store.incoming(f.b.id)[0]!.answeredBy, outgoing.id);
+  assert.equal(f.store.incoming(f.b.id)[0]!.acknowledgedAt, claim.message.acknowledgedAt);
+  assert.deepEqual(f.store.incoming(f.c.id), []);
+  f.store.disconnect(f.a.id, f.pair.id);
+  assert.equal(f.store.incoming(f.b.id).length, 3);
+  f.store.closePeer(f.b.id);
+  assert.throws(() => f.store.incoming(f.b.id), /closed/);
+});
+
+test('incoming keyset pages bound historical bodies and preserve received records through timestamp ties', (t) => {
+  const f = fixture(t);
+  const sent = [];
+  for (let index = 0; index < 105; index++) {
+    if (index === 104) f.advance(1000);
+    sent.push(f.store.send(f.a.id, { to: f.b.id, body: `Checkpoint ${index}`, kind: 'notice', idempotencyKey: `page-${index}` }));
+  }
+  const expected = sent.sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
+  assert.equal(f.store.incoming(f.b.id).length, 100);
+  assert.equal(f.store.incoming(f.b.id, { limit: 101 }).length, 101);
+  const firstPage = f.store.incoming(f.b.id, { limit: 7 });
+  assert.deepEqual(firstPage.map(({ id }) => id), expected.slice(0, 7).map(({ id }) => id));
+  const receipt = f.store.claim(f.b.id, firstPage[0]!.id);
+  assert.equal(f.open().incoming(f.b.id, { limit: 7 })[0]!.acknowledgedAt, receipt.message.acknowledgedAt);
+  const actual = firstPage.map(({ id }) => id);
+  let after = firstPage.at(-1)!;
+  for (;;) {
+    const next = f.store.incoming(f.b.id, { limit: 7, after: { createdAt: after.createdAt, id: after.id } });
+    assert.ok(next.length <= 7);
+    if (!next.length) break;
+    actual.push(...next.map(({ id }) => id));
+    after = next.at(-1)!;
+  }
+  assert.deepEqual(actual, expected.map(({ id }) => id));
+  for (const limit of [0, -1, 102, 1.5, NaN]) assert.throws(() => f.store.incoming(f.b.id, { limit }), /Incoming limit/);
+  assert.throws(() => f.store.incoming(f.b.id, { after: { createdAt: NaN, id: firstPage[0]!.id } }), /cursor timestamp/);
+  assert.throws(() => f.store.incoming(f.b.id, { after: { createdAt: 1_000_000, id: '' } }), /cursor ID/);
 });

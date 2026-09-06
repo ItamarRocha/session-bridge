@@ -1,5 +1,5 @@
 import type { Host, Message, Peer, SendInput, StoreContract } from './types.js';
-import { deliverCodex, notifyEndpoint } from './transport.js';
+import { deliverCodex } from './transport.js';
 
 export class Bridge {
   private selfId: string | undefined;
@@ -98,15 +98,13 @@ export class Bridge {
     return { detached: id };
   }
 
-  private async dispatch(message: Message): Promise<Message> {
-    if (!this.store.beginDelivery(message.id)) return this.store.message(message.from, message.id);
+  async dispatch(message: Message): Promise<Message> {
     const peer = this.store.peer(message.to);
+    if (peer.host === 'claude' || !this.store.beginDelivery(message.id)) {
+      return this.store.message(message.from, message.id);
+    }
     try {
-      const result = peer.host === 'codex'
-        ? await deliverCodex(peer, message, { command: this.codexCommand, home: this.store.home })
-        : peer.endpoint
-          ? await notifyEndpoint(peer.endpoint, message.id)
-          : { state: 'stored' as const, detail: 'Claude monitor has no live bridge endpoint. Reconnect before retrying this idempotency key.' };
+      const result = await deliverCodex(peer, message, { command: this.codexCommand, home: this.store.home });
       this.store.finishDelivery(message.id, result);
     } catch {
       this.store.finishDelivery(message.id, { state: 'unknown', detail: 'Transport failed unexpectedly; delivery may have happened. No automatic retry.' });

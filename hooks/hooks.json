@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__(plugin_session-bridge_session-bridge|session-bridge)__bridge_(connect|sessions_list|status_update|message_send|messages_read|disconnect)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/cli.js\" context-hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

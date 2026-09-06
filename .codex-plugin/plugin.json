@@ -1,7 +1,7 @@
 {
   "name": "session-bridge",
-  "version": "0.1.0",
-  "description": "Pair existing Codex and Claude Code sessions for bounded request and reply.",
+  "version": "0.3.0",
+  "description": "Connect running Codex and Claude Code sessions by native ID, exchange messages, and inspect delivery.",
   "author": {
     "name": "Itamar Rocha",
     "url": "https://github.com/ItamarRocha"
