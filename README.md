@@ -117,4 +117,6 @@ A [visual collaboration guide](docs/collaboration.html) is also included; open t
 
 ## License
 
-The repository is currently `UNLICENSED`; a public-release license has not been selected. Source builds are supported; the package is not published to npm.
+Session Bridge is licensed under the [MIT License](LICENSE).
+
+Source builds are supported; the package is not published to npm.
