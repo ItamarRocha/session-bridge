@@ -88,6 +88,7 @@ async function main() {
   };
   if (command === 'context-hook') {
     let input = '';
+    process.stdin.setEncoding('utf8');
     for await (const chunk of process.stdin) {
       input += String(chunk);
       if (Buffer.byteLength(input) > 262144) throw new Error('Hook input exceeds 256 KiB.');
@@ -102,10 +103,30 @@ async function main() {
 
   if (command === 'doctor') { print(await doctor(home, codexCommand)); return; }
   if (command === 'monitor') {
-    const monitor = await startMonitor(home, option('label') ?? '', line => process.stdout.write(`${line}\n`), option('session-id'));
-    const stop = () => void monitor.close().catch(() => { process.exitCode = 1; });
-    process.once('SIGINT', stop);
-    process.once('SIGTERM', stop);
+    let monitor: Awaited<ReturnType<typeof startMonitor>> | undefined;
+    let outputError: Error | undefined;
+    process.stdout.on('error', error => {
+      outputError = error;
+      void monitor?.close().catch(() => { process.exitCode = 1; });
+    });
+    const output = (line: string) => new Promise<void>((resolve, reject) => {
+      process.stdout.write(`${line}\n`, error => error ? reject(error) : resolve());
+    });
+    const stop = () => void monitor?.close().catch(() => { process.exitCode = 1; });
+    try {
+      monitor = await startMonitor(home, option('label') ?? '', output, option('session-id'));
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+      await monitor.done;
+      if (outputError) throw outputError;
+    } finally {
+      process.off('SIGINT', stop);
+      process.off('SIGTERM', stop);
+      // Node can retain a pipe write after stdout.destroy(); bound shutdown after releasing the lease.
+      process.stdout.destroy();
+      const exitDeadline = setTimeout(() => { process.exit(process.exitCode ?? 0); }, 250);
+      exitDeadline.unref();
+    }
     return;
   }
   const store = new Store(home);

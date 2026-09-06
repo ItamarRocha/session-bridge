@@ -28,6 +28,12 @@ export interface ConnectedPeer {
   pairing: Pairing;
 }
 
+export interface ReceiverStatus {
+  state: 'available' | 'unavailable' | 'unknown';
+  checkedAt: number | null;
+  expiresAt: number | null;
+}
+
 export interface Message {
   id: string;
   pairingId: string;
@@ -45,6 +51,7 @@ export interface Message {
   claimExpiresAt: number | null;
   answeredBy: string | null;
   cancelledAt: number | null;
+  notifiedAt?: number | null;
 }
 
 export interface SendInput {
@@ -71,6 +78,13 @@ export interface StoreContract {
   createPeer(input: {host: Host; label: string; nativeSessionId?: string; endpoint?: string}): {peer: Peer; ticket: string};
   ensureCodexPeer(input: {nativeSessionId: string; label?: string; attach?: boolean}): Peer;
   findNativePeer(nativeSessionId: string, host?: Host): Peer | null;
+  sameSession(a: string, b: string): boolean;
+  acquireReceiver(input: {nativeSessionId?: string; label: string}): {peer: Peer; ownerToken: string; ticket?: string};
+  renewReceiver(peerId: string, ownerToken: string): boolean;
+  releaseReceiver(peerId: string, ownerToken: string): void;
+  receiverStatus(peerId: string): ReceiverStatus;
+  pendingNotifications(peerId: string, ownerToken: string, limit?: number): Message[];
+  markNotified(peerId: string, ownerToken: string, messageId: string): boolean;
   attach(ticket: string): Peer;
   peer(id: string): Peer;
   peers(): Peer[];

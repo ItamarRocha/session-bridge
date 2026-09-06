@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
-import { chmod, lstat, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { createConnection, createServer } from 'node:net';
+import { lstat, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
-import { deliverCodex, listenForNotices, messageNotice, notifyEndpoint } from '../src/transport.js';
+import { deliverCodex, messageNotice } from '../src/transport.js';
 import type { Message, Peer } from '../src/types.js';
 
 const peer: Peer = {
@@ -28,22 +27,6 @@ async function fakeCodex(dir: string, body: string): Promise<string> {
   const path = join(dir, 'fake codex; literal-dollar-$');
   await writeFile(path, `#!${process.execPath}\n${body}\n`, {mode: 0o700});
   return path;
-}
-
-async function rawNotice(path: string, chunks: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const socket = createConnection({path});
-    let response = '';
-    const deadline = setTimeout(() => { socket.destroy(); reject(new Error('Raw notice timed out.')); }, 3_000);
-    socket.on('error', (error: NodeJS.ErrnoException) => {
-      if (error.code !== 'ECONNRESET' && error.code !== 'EPIPE') reject(error);
-    });
-    socket.once('connect', () => {
-      for (const chunk of chunks) socket.write(chunk);
-    });
-    socket.on('data', (chunk: Buffer) => { response += chunk.toString('utf8'); });
-    socket.once('close', () => { clearTimeout(deadline); resolve(response); });
-  });
 }
 
 test('native notices contain only validated references and an actionable CLI fallback', () => {
@@ -125,103 +108,4 @@ test('Codex failures after launch remain unknown and do not expose process outpu
   const timedOut = await deliverCodex(peer, message, {command: delayed, timeoutMs: 50});
   assert.equal(timedOut.state, 'unknown');
   assert.match(timedOut.detail, /Do not retry automatically/);
-});
-
-test('a private bridge socket submits one reference and removes its owned endpoint on close', async (t) => {
-  const dir = await scratch(t);
-  const path = join(dir, 'notice.sock');
-  const received: string[] = [];
-  const listener = await listenForNotices(path, (id) => { received.push(id); });
-  t.after(() => listener.close());
-  assert.equal((await lstat(path)).mode & 0o777, 0o600);
-  assert.equal((await notifyEndpoint(path, message.id)).state, 'submitted');
-  assert.deepEqual(received, [message.id]);
-  await listener.close();
-  await listener.close();
-  await assert.rejects(lstat(path), {code: 'ENOENT'});
-});
-
-test('malformed, oversized, and multiple frames never reach the notice callback', async (t) => {
-  const dir = await scratch(t);
-  const path = join(dir, 'notice.sock');
-  const received: string[] = [];
-  const listener = await listenForNotices(path, (id) => { received.push(id); });
-  t.after(() => listener.close());
-  for (const frame of [
-    'not-json\n',
-    '{"version":2,"messageId":"msg_example"}\n',
-    '{"version":1,"messageId":"msg_example","body":"text"}\n',
-    '{"version":1,"messageId":"msg_bad; command"}\n',
-    '{"version":1,"messageId":"msg_example"}\n{"version":1,"messageId":"msg_second"}\n',
-    'x'.repeat(4097),
-  ]) await rawNotice(path, [frame]);
-  assert.deepEqual(received, []);
-  assert.equal(await rawNotice(path, ['{"version":1,', '"messageId":"msg_fragmented"}\n']), '{"ok":true}\n');
-  assert.deepEqual(received, ['msg_fragmented']);
-});
-
-test('missing, insecure, and preexisting endpoints fail without deleting user files', async (t) => {
-  const dir = await scratch(t);
-  const path = join(dir, 'notice.sock');
-  assert.equal((await notifyEndpoint(path, message.id)).state, 'stored');
-  await writeFile(path, 'keep this file', {mode: 0o600});
-  await assert.rejects(listenForNotices(path, () => {}));
-  assert.equal(await readFile(path, 'utf8'), 'keep this file');
-  assert.equal((await notifyEndpoint(path, message.id)).state, 'stored');
-  await chmod(dir, 0o755);
-  await assert.rejects(listenForNotices(join(dir, 'other.sock'), () => {}), /private directory/);
-  await chmod(dir, 0o700);
-});
-
-test('closing a listener preserves a replacement at the published endpoint path', async (t) => {
-  const dir = await scratch(t);
-  const path = join(dir, 'notice.sock');
-  const listener = await listenForNotices(path, () => {});
-  t.after(() => listener.close());
-  await rm(path);
-  await writeFile(path, 'replacement owned by somebody else', {mode: 0o600});
-  await listener.close();
-  assert.equal(await readFile(path, 'utf8'), 'replacement owned by somebody else');
-});
-
-test('a callback rejection is unconfirmed, and an acknowledgment timeout never retries', async (t) => {
-  const dir = await scratch(t);
-  const rejectedPath = join(dir, 'rejected.sock');
-  const rejected = await listenForNotices(rejectedPath, () => { throw new Error('private authorization reason'); });
-  t.after(() => rejected.close());
-  const rejection = await notifyEndpoint(rejectedPath, message.id);
-  assert.equal(rejection.state, 'unknown');
-  assert.ok(!rejection.detail.includes('private authorization'));
-  let count = 0;
-  let release: (() => void) | undefined;
-  const waitingPath = join(dir, 'waiting.sock');
-  const waiting = await listenForNotices(waitingPath, () => {
-    count += 1;
-    return new Promise<void>((resolve) => { release = resolve; });
-  });
-  t.after(() => waiting.close());
-  const timeout = await notifyEndpoint(waitingPath, message.id, 50);
-  assert.equal(timeout.state, 'unknown');
-  assert.equal(count, 1);
-  release?.();
-});
-
-test('invalid or oversized acknowledgments remain unknown and do not reflect endpoint text', async (t) => {
-  const dir = await scratch(t);
-  for (const response of ['{"ok":false,"secret":"do not expose"}\n', 'x'.repeat(4097)]) {
-    const path = join(dir, 'malicious.sock');
-    const server = createServer((socket) => {
-      socket.on('error', () => {});
-      socket.once('data', () => socket.end(response));
-    });
-    await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(path, resolve); });
-    await chmod(path, 0o600);
-    try {
-      const result = await notifyEndpoint(path, message.id);
-      assert.equal(result.state, 'unknown');
-      assert.ok(!result.detail.includes('do not expose'));
-    } finally {
-      await new Promise<void>((resolve, reject) => { server.close((error) => error ? reject(error) : resolve()); });
-    }
-  }
 });

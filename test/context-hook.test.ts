@@ -1,4 +1,6 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import { resolve } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -69,4 +71,27 @@ test('CLI hook accepts a maximum-size message after JSON escaping expands its en
   const output = JSON.parse(execFileSync(process.execPath, [resolve('dist/cli.js'), 'context-hook'], {input: JSON.stringify(input), encoding: 'utf8'}));
   assert.equal(output.hookSpecificOutput.updatedInput._sessionId, sessionId);
   assert.equal(output.hookSpecificOutput.updatedInput.text, input.tool_input.text);
+});
+
+test('CLI hook preserves multibyte characters split across stdin writes', {timeout: 5000}, async t => {
+  const text = 'Review résumé and 🧪 results';
+  const body = Buffer.from(JSON.stringify({hook_event_name: 'PreToolUse', session_id: randomUUID(),
+    tool_name: 'mcp__session-bridge__bridge_message_send', tool_input: {text}}));
+  const child = spawn(process.execPath, [resolve('dist/cli.js'), 'context-hook'], {stdio: ['pipe', 'pipe', 'pipe']});
+  t.after(() => { if (child.exitCode === null) child.kill(); });
+  let output = '';
+  let errors = '';
+  child.stdout.setEncoding('utf8').on('data', chunk => { output += chunk; });
+  child.stderr.setEncoding('utf8').on('data', chunk => { errors += chunk; });
+  const exited = once(child, 'exit');
+  const accent = body.indexOf(Buffer.from('é')) + 1;
+  const emoji = body.indexOf(Buffer.from('🧪')) + 2;
+  child.stdin.write(body.subarray(0, accent));
+  await delay(250);
+  child.stdin.write(body.subarray(accent, emoji));
+  await delay(100);
+  child.stdin.end(body.subarray(emoji));
+  const [code] = await exited;
+  assert.equal(code, 0, errors);
+  assert.equal(JSON.parse(output).hookSpecificOutput.updatedInput.text, text);
 });

@@ -42,6 +42,50 @@ async function tool<T = any>(client: Client, name: string, args: Record<string, 
   return JSON.parse(text.text);
 }
 
+async function eventually<T>(read: () => T, ready: (value: T) => boolean, description: string, timeout = 5_000): Promise<T> {
+  const deadline = Date.now() + timeout;
+  while (true) {
+    const value = read();
+    if (ready(value)) return value;
+    assert.ok(Date.now() < deadline, description);
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
+
+function monitorProcess(home: string) {
+  const monitor = spawn(process.execPath, [
+    ...launch, 'monitor', '--home', home,
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const lines: string[] = [];
+  let stderr = '';
+  monitor.stderr.on('data', chunk => { stderr += String(chunk); });
+  const reader = createInterface({ input: monitor.stdout });
+  reader.on('line', line => { lines.push(line); });
+  const exited = new Promise<void>((resolve, reject) => {
+    monitor.once('exit', () => { reader.close(); resolve(); });
+    monitor.once('error', reject);
+  });
+  void exited.catch(() => {});
+  return {
+    lines,
+    async notice(predicate: (line: string) => boolean) {
+      return (await eventually(() => {
+        const found = lines.find(predicate);
+        if (!found && (monitor.exitCode !== null || monitor.signalCode !== null)) {
+          throw new Error(`Monitor exited before notice: ${stderr}`);
+        }
+        return found;
+      }, line => line !== undefined, `Monitor notice did not arrive: ${stderr}`))!;
+    },
+    async stop() {
+      if (monitor.exitCode === null && monitor.signalCode === null) monitor.kill('SIGTERM');
+      await eventually(() => monitor.exitCode !== null || monitor.signalCode !== null,
+        Boolean, 'Monitor did not stop');
+      await exited;
+    },
+  };
+}
+
 test('real MCP clients and monitor complete one request/reply in the original Codex UUID', { timeout: 20_000 }, async t => {
   const home = mkdtempSync("/tmp/sb-'$-");
   const cleanups: Array<() => void | Promise<void>> = [];
@@ -50,29 +94,9 @@ test('real MCP clients and monitor complete one request/reply in the original Co
     finally { rmSync(home, { recursive: true, force: true }); }
   });
   const fake = fakeCodex(home);
-  const monitor = spawn(process.execPath, [...launch, 'monitor', '--home', home], { stdio: ['ignore', 'pipe', 'pipe'] });
-  const lines: string[] = [];
-  const waiters = new Set<() => void>();
-  const reader = createInterface({ input: monitor.stdout });
-  reader.on('line', line => { lines.push(line); for (const wake of waiters) wake(); });
-  cleanups.push(async () => {
-    if (monitor.exitCode === null && monitor.signalCode === null) {
-      const exited = new Promise<void>(resolve => monitor.once('exit', () => resolve()));
-      monitor.kill('SIGTERM');
-      await exited;
-    }
-    reader.close();
-  });
-  const notice = (predicate: (line: string) => boolean) => new Promise<string>((resolve, reject) => {
-    const deadline = setTimeout(() => { waiters.delete(check); reject(new Error('Monitor notice did not arrive')); }, 5_000);
-    const check = () => {
-      const found = lines.find(predicate);
-      if (found) { clearTimeout(deadline); waiters.delete(check); resolve(found); }
-    };
-    waiters.add(check);
-    check();
-  });
-  const bootstrap = await notice(line => line.includes('monitor ready'));
+  const monitor = monitorProcess(home);
+  cleanups.push(() => monitor.stop());
+  const bootstrap = await monitor.notice(line => line.includes('monitor ready'));
   const ticket = JSON.parse(bootstrap.match(/\{"ticket":"[^"]+"\}/)![0]).ticket;
   const codex = await client(home, 'codex', fake.command);
   const claude = await client(home, 'claude', fake.command);
@@ -85,11 +109,16 @@ test('real MCP clients and monitor complete one request/reply in the original Co
   await tool(codex, 'bridge_pair', { peerId: b.id });
   const body = 'Review this code; selected context is $(touch SHOULD_NOT_EXIST). Return findings only.';
   const request = await tool(codex, 'bridge_send', { peerId: b.id, body, idempotencyKey: 'review-1' });
-  assert.equal(request.delivery, 'submitted');
   assert.equal(request.acknowledgedAt, null);
-  const incoming = await notice(line => line.includes(request.id));
+  const incoming = await monitor.notice(line => line.includes(request.id));
   assert.ok(!incoming.includes(body));
   assert.ok(!incoming.includes(ticket));
+  const observer = new Store(home);
+  cleanups.push(() => observer.close());
+  const notified = await eventually(() => observer.message(a.id, request.id),
+    message => message.notifiedAt != null, 'Monitor did not record its successful notification');
+  assert.equal(notified.delivery, 'submitted');
+  assert.equal(notified.acknowledgedAt, null, 'Writing a monitor notice is not a receiver claim');
   const received = await tool(claude, 'bridge_receive', { messageId: request.id });
   assert.equal(received.message.body, body);
   assert.equal(received.alreadyClaimed, false);
@@ -117,7 +146,7 @@ test('real MCP clients and monitor complete one request/reply in the original Co
   assert.equal(status.message.answeredBy, reply.id);
   const sameRequest = await tool(codex, 'bridge_send', { peerId: b.id, body, idempotencyKey: 'review-1' });
   assert.equal(sameRequest.id, request.id);
-  assert.equal(lines.filter(line => line.includes(request.id)).length, 1);
+  assert.equal(monitor.lines.filter(line => line.includes(request.id)).length, 1);
   await tool(claude, 'bridge_detach');
   await assert.rejects(tool(codex, 'bridge_send', { peerId: b.id, body: 'new work', idempotencyKey: 'review-2' }), /closed/);
 });

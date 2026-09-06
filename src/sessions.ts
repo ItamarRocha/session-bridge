@@ -72,6 +72,7 @@ export class Sessions {
     return {
       ...this.identity(peer),
       connection: peer.closedAt !== null ? 'disconnected' : peer.attachedAt === null ? 'pending' : 'connected',
+      receiver: {...this.store.receiverStatus(peer.id), transport: peer.host === 'claude' ? 'inbox' : 'native_queue'},
       status: peer.statusText === null ? null : {text: peer.statusText, updatedAt: peer.statusUpdatedAt, source: 'self_report'},
     };
   }
@@ -86,6 +87,9 @@ export class Sessions {
     if (address.id === this.nativeSessionId?.toLowerCase() && (!address.host || address.host === this.host)) throw new Error('Cannot connect a session to itself.');
     const self = this.caller(true);
     if (!self) return {state: 'activation_required', detail: 'Invoke /session-bridge:connect in this Claude conversation first.'};
+    if (this.host === 'claude' && this.store.receiverStatus(self.id).state !== 'available') {
+      return {state: 'activation_required', self: this.summary(self), detail: 'This conversation’s receiver is unavailable. Invoke /session-bridge:connect to start its inbox watcher; existing connections and history are preserved.'};
+    }
     let target = this.target(sessionId);
     if (!target && address.host !== 'codex') return {
       state: 'activation_required', self: this.summary(self),
@@ -103,7 +107,7 @@ export class Sessions {
     const self = this.caller();
     if (!self) return {self: null, activationRequired: true, sessions: [], nextCursor: null};
     const result = page(this.store.connectedPeers(self.id).map(({peer, pairing}) => ({...pairing, peer})), input);
-    return {self: this.summary(self), activationRequired: false, sessions: result.items.map(({peer}) => this.summary(peer)), nextCursor: result.nextCursor};
+    return {self: this.summary(self), activationRequired: this.host === 'claude' && this.store.receiverStatus(self.id).state !== 'available', sessions: result.items.map(({peer}) => this.summary(peer)), nextCursor: result.nextCursor};
   }
 
   updateStatus(text: string) {
@@ -111,10 +115,13 @@ export class Sessions {
   }
 
   private publicMessage(message: Message, previouslyRead?: boolean) {
-    const {id, body, from, to, claimId: _claimId, ...rest} = message;
+    const {id, body, from, to, claimId: _claimId, claimExpiresAt: _claimExpiresAt, ...rest} = message;
     const {pairingId: _pairingId, ...evidence} = rest;
     const sender = this.store.peer(from), recipient = this.store.peer(to);
-    return {messageId: id, text: body, actionable: false, blockedReason: null as string | null, from: this.identity(sender), to: this.identity(recipient), ...evidence,
+    const deliveryStage = message.answeredBy !== null ? 'replied' : message.acknowledgedAt !== null ? 'read'
+      : message.cancelledAt !== null ? 'cancelled' : message.notifiedAt != null ? 'notified'
+        : message.delivery === 'submitted' ? 'submitted' : message.delivery === 'stored' ? 'queued' : 'uncertain';
+    return {messageId: id, text: body, deliveryStage, actionable: false, blockedReason: null as string | null, from: this.identity(sender), to: this.identity(recipient), ...evidence,
       ...(previouslyRead === undefined ? {} : {previouslyRead})};
   }
 
@@ -126,7 +133,7 @@ export class Sessions {
     if (input.replyTo) {
       if (input.expectsReply === true) throw new Error('A reply is terminal; expectsReply cannot be true with replyTo.');
       const original = this.store.message(self.id, input.replyTo);
-      if (original.to !== self.id || original.from !== target.id) throw new Error('Reply participants must match the original request.');
+      if (!this.store.sameSession(original.to, self.id) || !this.store.sameSession(original.from, target.id)) throw new Error('Reply participants must match the original request.');
       if (!original.claimId) throw new Error('Read the incoming request before replying.');
       const reply = this.store.reply(self.id, original.id, original.claimId, input.text, input.idempotencyKey);
       return this.publicMessage(await bridge.dispatch(reply));
@@ -151,13 +158,13 @@ export class Sessions {
       const provisional = this.store.findNativePeer(this.nativeSessionId, 'codex');
       if (provisional) {
         const message = this.store.message(provisional.id, input.messageId);
-        if (message.to === provisional.id) return {messages: [this.receive(provisional, message, true)], nextCursor: null, instruction: RECEIPT_INSTRUCTION};
+        if (this.store.sameSession(message.to, provisional.id)) return {messages: [this.receive(provisional, message, true)], nextCursor: null, instruction: RECEIPT_INSTRUCTION};
       }
     }
     if (!self) throw new Error('Activation required: connect this session before reading messages.');
     if (input.messageId) {
       const message = this.store.message(self.id, input.messageId);
-      return {messages: [message.to === self.id ? this.receive(self, message) : this.publicMessage(message)], nextCursor: null, instruction: RECEIPT_INSTRUCTION};
+      return {messages: [this.store.sameSession(message.to, self.id) ? this.receive(self, message) : this.publicMessage(message)], nextCursor: null, instruction: RECEIPT_INSTRUCTION};
     }
     const {limit, after} = pagination(input);
     const result = page(this.store.incoming(self.id, {limit: limit + 1, after}), input);

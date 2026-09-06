@@ -27,12 +27,16 @@ function fixture(t: TestContext, queueExit = 0) {
     return store;
   };
   const store = open();
+  const receivers = new Map<string, ReturnType<Store['acquireReceiver']>>();
   for (const [host, nativeSessionId, label] of [
     ['codex', CODEX_A, 'Implementer'], ['codex', CODEX_B, 'Experiment'],
     ['claude', CLAUDE_A, 'Reviewer'], ['claude', CLAUDE_B, 'Second reviewer'],
   ] satisfies Array<[Host, string, string]>) {
-    const registration = store.createPeer({ host, nativeSessionId, label });
-    store.attach(registration.ticket);
+    if (host === 'claude') receivers.set(nativeSessionId, store.acquireReceiver({ nativeSessionId, label }));
+    else {
+      const registration = store.createPeer({ host, nativeSessionId, label });
+      store.attach(registration.ticket);
+    }
   }
   const session = (host: Host, id: string | undefined, database = store) => new Sessions(database, host, id, command);
   t.after(() => {
@@ -40,7 +44,7 @@ function fixture(t: TestContext, queueExit = 0) {
     rmSync(home, { recursive: true, force: true });
   });
   return {
-    store, open, session,
+    store, open, session, receivers,
     codexA: session('codex', CODEX_A), codexB: session('codex', CODEX_B),
     claudeA: session('claude', CLAUDE_A), claudeB: session('claude', CLAUDE_B),
     advance: (ms: number) => { now += ms; },
@@ -52,6 +56,7 @@ function assertPublicIdentity(value: unknown) {
   const serialized = JSON.stringify(value);
   assert.ok(!serialized.includes('sb_'), 'Public results must not expose internal peer IDs.');
   assert.ok(!serialized.includes('claimId'), 'Receipt tokens remain inside the facade.');
+  assert.ok(!serialized.includes('claimExpiresAt'), 'The retired receipt lease is not a public reply deadline.');
   assert.ok(!serialized.includes('pairingId'), 'Connection tokens remain inside the facade.');
 }
 
@@ -112,6 +117,39 @@ test('listing and self status remain silent, attributed and stale without activa
   assert.deepEqual(f.codexA.read().messages, []);
   assert.deepEqual(f.claudeA.read().messages, []);
   assert.deepEqual(f.queued(), []);
+});
+
+test('receiver health and message progress stay distinct from durable connections', async t => {
+  const f = fixture(t);
+  await f.codexA.connect(CLAUDE_A);
+  const receiver = f.receivers.get(CLAUDE_A)!;
+  assert.equal(f.codexA.list().sessions[0]!.receiver.state, 'available');
+  assert.equal(f.claudeA.list().sessions[0]!.receiver.state, 'unknown');
+  f.store.releaseReceiver(receiver.peer.id, receiver.ownerToken);
+  const offline = f.claudeA.list();
+  assert.equal(offline.activationRequired, true);
+  assert.equal(offline.self!.sessionId, CLAUDE_A);
+  assert.equal(offline.sessions[0]!.sessionId, CODEX_A);
+  assert.equal(f.codexA.list().sessions[0]!.connection, 'connected');
+  assert.equal(f.codexA.list().sessions[0]!.receiver.state, 'unavailable');
+  assert.equal((await f.claudeA.connect(CLAUDE_B)).state, 'activation_required');
+  assert.equal(f.claudeA.list().sessions.length, 1);
+
+  const queued = await f.codexA.send({ sessionId: CLAUDE_A, text: 'Review when the receiver returns.', idempotencyKey: 'offline' });
+  assert.equal(queued.deliveryStage, 'queued');
+  assert.equal(queued.acknowledgedAt, null);
+  const replacement = f.store.acquireReceiver({ nativeSessionId: CLAUDE_A, label: 'Reviewer resumed' });
+  assert.equal(replacement.peer.id, receiver.peer.id);
+  assert.equal(f.claudeA.list().activationRequired, false);
+  assert.equal(f.store.markNotified(replacement.peer.id, replacement.ownerToken, queued.messageId), true);
+  const notified = f.codexA.read({ messageId: queued.messageId }).messages[0]!;
+  assert.equal(notified.deliveryStage, 'notified');
+  assert.equal(notified.acknowledgedAt, null);
+  assert.equal(f.claudeA.read({ messageId: queued.messageId }).messages[0]!.deliveryStage, 'read');
+  await f.claudeA.send({ sessionId: CODEX_A, text: 'Review finished.', replyTo: queued.messageId, idempotencyKey: 'offline-result' });
+  assert.equal(f.codexA.read({ messageId: queued.messageId }).messages[0]!.deliveryStage, 'replied');
+  assertPublicIdentity(f.claudeA.list());
+  assert.ok(!JSON.stringify(f.claudeA.list()).includes(replacement.ownerToken));
 });
 
 test('messages preserve receipts and one final reply while notices and retries cannot create reply loops', async t => {
@@ -213,18 +251,19 @@ test('message pagination and competing readers preserve one receipt across datab
   assert.deepEqual(new Set([...peers.sessions, ...nextPeers.sessions].map(peer => peer.sessionId)), new Set([CLAUDE_A, CODEX_B]));
 });
 
-test('expired receipt leases and request deadlines do not become fresh work through the simple interface', async t => {
+test('a receipt survives long work while the original request deadline still limits replies', async t => {
   const f = fixture(t);
   await f.codexA.connect(CLAUDE_A);
   const received = await f.codexA.send({ sessionId: CLAUDE_A, text: 'Bounded review.', idempotencyKey: 'received' });
   const untouched = await f.codexA.send({ sessionId: CLAUDE_A, text: 'Another bounded review.', idempotencyKey: 'untouched' });
-  f.claudeA.read({ messageId: received.messageId });
+  const original = f.claudeA.read({ messageId: received.messageId }).messages[0]!;
   f.advance(1_800_001);
-  const leaseExpired = f.claudeA.read({ messageId: received.messageId }).messages[0]!;
-  assert.equal(leaseExpired.actionable, false);
-  assert.equal(leaseExpired.previouslyRead, true);
-  assert.match(leaseExpired.blockedReason!, /automatic re-claim is disabled/);
-  await assert.rejects(f.claudeA.send({ sessionId: CODEX_A, replyTo: received.messageId, text: 'Late result.', idempotencyKey: 'late' }), /lease expired/);
+  const recoveredReceipt = f.claudeA.read({ messageId: received.messageId }).messages[0]!;
+  assert.equal(recoveredReceipt.actionable, true);
+  assert.equal(recoveredReceipt.previouslyRead, true);
+  assert.equal(recoveredReceipt.acknowledgedAt, original.acknowledgedAt);
+  assert.equal(recoveredReceipt.blockedReason, null);
+  const lateReply = await f.claudeA.send({ sessionId: CODEX_A, replyTo: received.messageId, text: 'Late result.', idempotencyKey: 'late' });
   f.advance(1_800_000);
   const fresh = await f.codexA.send({ sessionId: CLAUDE_A, text: 'A fresh request after the earlier deadlines.', idempotencyKey: 'fresh' });
   const recovered = f.claudeA.read().messages;
@@ -242,7 +281,7 @@ test('expired receipt leases and request deadlines do not become fresh work thro
   assert.equal(expired.previouslyRead, false);
   assert.match(expired.blockedReason!, /expired/);
   assert.equal(f.codexA.read({ messageId: untouched.messageId }).messages[0]!.acknowledgedAt, null);
-  assert.equal(f.codexA.read({ messageId: received.messageId }).messages[0]!.answeredBy, null);
+  assert.equal(f.codexA.read({ messageId: received.messageId }).messages[0]!.answeredBy, lateReply.messageId);
 });
 
 test('uncertain native delivery remains inspectable and is not repeated on an idempotent send', async t => {
