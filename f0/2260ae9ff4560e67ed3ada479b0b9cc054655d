@@ -1,0 +1,34 @@
+src/codex-environment.ts
+  s_e715395fcc9d04::t_97fbda3cf34b34 1-18
+test/transport.test.ts
+  s_e715395fcc9d04::t_4bb21f9f01e9bc 93-117
+test/doctor.test.ts
+  s_e715395fcc9d04::t_96ae95925ba625 1-26
+docs/support.md
+  s_e715395fcc9d04::t_05e9107acd3505 17-40,63-64
+src/transport.ts
+  s_e715395fcc9d04::t_97fbda3cf34b34 9,64-69,84
+src/doctor.ts
+  s_e715395fcc9d04::t_97fbda3cf34b34 3,7,9,17-18,20,26,28,32
+README.md
+  s_e715395fcc9d04::t_05e9107acd3505 34-35
+docs/live-validation.md
+  s_e715395fcc9d04::t_38a0664962af94 43-44
+  s_e715395fcc9d04::t_05e9107acd3505 7,31-38,52-53,57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "f02260ae9ff4560e67ed3ada479b0b9cc054655d",
+  "prompts": {},
+  "sessions": {
+    "s_e715395fcc9d04": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07056-03b8-77b1-864a-470e8dcece14",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Itamar Rocha Filho <itamardprf@gmail.com>"
+    }
+  }
+}
