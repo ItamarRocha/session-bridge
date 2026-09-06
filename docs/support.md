@@ -40,6 +40,8 @@ If delivery remains `submitted`, inspect the exact message's bridge receipt and 
 
 ## Claude Code
 
+Use `/session-bridge:sessions` to list the current conversation's connected peers and their latest reported status. The command reads all result pages without activating the bridge. Run `/reload-plugins` after updating the checkout to make a new command available in an existing conversation.
+
 Install the built checkout as a personal plugin and run `/reload-plugins` in the intended conversation. `/session-bridge:connect` is the explicit activation command. It starts Claude's native `Monitor` tool with `monitor --session-id "${CLAUDE_SESSION_ID}"`; no automatically declared plugin monitor starts on terminal creation. A regular background Bash process cannot replace native model notifications. [Monitor tool](https://code.claude.com/docs/en/tools-reference#monitor-tool), [skill substitutions](https://code.claude.com/docs/en/skills#available-string-substitutions)
 
 The plugin's `PreToolUse` hook passes the current hook `session_id` to bridge calls as private context. It does not trust an MCP startup environment surviving `/clear` or a conversation change. After either, explicitly activate the new conversation again. When MCP reconnects within the same native conversation, fresh per-call identity can reuse its active receiver without a ticket exchange. [Hook input](https://code.claude.com/docs/en/hooks#common-input-fields)

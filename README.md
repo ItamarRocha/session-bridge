@@ -57,6 +57,14 @@ Use `codex:UUID` for a Codex task that has not used the bridge yet. Connecting s
 
 An already registered peer accepts its bare UUID, or a `codex:` / `claude:` prefix. An unknown bare UUID returns `activation_required`; the bridge does not guess its provider. An inactive Claude target must first run `/session-bridge:connect` in that conversation. A UUID alone is not a route to another machine.
 
+To list this conversation's connected peers, run:
+
+```text
+/session-bridge:sessions
+```
+
+It shows native IDs, providers, connection state and the latest reported status with its timestamp. Listing leaves an inactive bridge dormant. After updating the plugin, run `/reload-plugins` once to load the new command.
+
 ## Use an existing Codex task without reloading tools
 
 Ask the task to read `skills/session-bridge/SKILL.md` from the checkout. It can use the CLI through its existing shell tool; caller identity comes from that task's own `CODEX_THREAD_ID`.
