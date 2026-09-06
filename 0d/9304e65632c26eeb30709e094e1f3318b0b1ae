@@ -1,0 +1,23 @@
+test/store.test.ts
+  s_e715395fcc9d04::t_20f6a9ea931b6e 501-529
+src/types.ts
+  s_e715395fcc9d04::t_20f6a9ea931b6e 87
+src/store.ts
+  s_e715395fcc9d04::t_20f6a9ea931b6e 389,391-399
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "0d9304e65632c26eeb30709e094e1f3318b0b1ae",
+  "prompts": {},
+  "sessions": {
+    "s_e715395fcc9d04": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07056-03b8-77b1-864a-470e8dcece14",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Itamar Rocha Filho <itamardprf@gmail.com>"
+    }
+  }
+}
