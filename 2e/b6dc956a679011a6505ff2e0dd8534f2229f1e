@@ -1,0 +1,23 @@
+docs/support.md
+  s_e715395fcc9d04::t_bcbe24634628b2 43-44
+commands/sessions.md
+  s_e715395fcc9d04::t_bcbe24634628b2 1-15
+README.md
+  s_e715395fcc9d04::t_bcbe24634628b2 60-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "2eb6dc956a679011a6505ff2e0dd8534f2229f1e",
+  "prompts": {},
+  "sessions": {
+    "s_e715395fcc9d04": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07056-03b8-77b1-864a-470e8dcece14",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Itamar Rocha Filho <itamardprf@gmail.com>"
+    }
+  }
+}
