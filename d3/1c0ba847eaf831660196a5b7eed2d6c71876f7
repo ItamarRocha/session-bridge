@@ -1,0 +1,38 @@
+docs/live-validation.md
+  s_e715395fcc9d04::t_30c06952f9371c 64
+  s_e715395fcc9d04::t_64b29fb6dbcb99 3,58-63,65-68
+README.md
+  s_e715395fcc9d04::t_10d06eeb287bc3 5,7,32,48,58,66,95,97,116
+commands/connect.md
+  s_e715395fcc9d04::t_1a63a2a3d8183a 9,13-15,18
+commands/sessions.md
+  s_e715395fcc9d04::t_35eb61430c2161 3,12-13,15
+docs/collaboration-v2.html
+  s_e715395fcc9d04::t_129677589785a9 15,17-19,22
+docs/collaboration-v2.md
+  s_e715395fcc9d04::t_755a7858c7f395 7,36,40-41,63,73-74,77
+docs/design.md
+  s_e715395fcc9d04::t_05a27f8ed184a8 15,29-31,37,45-47,49-59,61,63,65,67,75
+docs/plugin-methods.md
+  s_e715395fcc9d04::t_eb0e3d2ca61df8 10,12,18,26-31,36,38,46,52
+docs/support.md
+  s_e715395fcc9d04::t_2469b819b89c37 43,45,51-54,57-65,73-77,86-87,93,104,106,108,118,122
+skills/session-bridge/SKILL.md
+  s_e715395fcc9d04::t_ce337bc372908d 13,15,17,22-23,26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "d31c0ba847eaf831660196a5b7eed2d6c71876f7",
+  "prompts": {},
+  "sessions": {
+    "s_e715395fcc9d04": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07056-03b8-77b1-864a-470e8dcece14",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Itamar Rocha Filho <itamardprf@gmail.com>"
+    }
+  }
+}
