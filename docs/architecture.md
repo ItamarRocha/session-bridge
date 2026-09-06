@@ -2,7 +2,7 @@
 
 ## Existing conversations connected by messages
 
-The bridge moves selected messages between existing conversations. Each session can connect to several peers, including peers of the same provider. It has no model credentials, inference client or session-spawning API. Goals, tasks and collaboration decisions remain in the clients. The bridge owns connections, durable messages and a short self-status. [Six-method interface](plugin-methods.md)
+The bridge moves selected messages between existing conversations. Each session can connect to several peers, including peers of the same provider. It has no model credentials, inference client or session-spawning API. Goals, tasks and collaboration decisions remain in the clients. The bridge owns connections, durable messages and a short self-status. [Six-method interface](methods.md)
 
 ```mermaid
 flowchart LR
@@ -30,7 +30,7 @@ Connection edges are explicit and non-transitive. A–B and A–C permit those p
 
 A Claude native identity and its history/connections survive receiver exit. A five-second ownership lease, renewed every second, permits one watcher for that identity; release or expiry lets an explicitly started replacement take over without reconnecting peers. This is transport ownership, not a work assignment or model scheduler.
 
-The helpers share the ledger without a central coordination daemon. MCP stdout is protocol-only; monitor stdout carries notifications; diagnostics use stderr. Native model consumption and wake timing require [live validation](live-validation.md).
+The helpers share the ledger without a central coordination daemon. MCP stdout is protocol-only; monitor stdout carries notifications; diagnostics use stderr. Native model consumption and wake timing require [live validation](validation.md).
 
 ## Scope and authority
 

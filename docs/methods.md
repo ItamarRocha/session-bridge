@@ -1,6 +1,6 @@
 # Six methods for connecting and messaging
 
-Implemented interface · [Design](collaboration-v2.md) · [Visual guide](collaboration-v2.html) · [Live validation](live-validation.md)
+Implemented interface · [Design](collaboration.md) · [Visual guide](collaboration.html) · [Live validation](validation.md)
 
 The default MCP catalog exposes these six methods. Goals, tasks, handoffs and reviews use native state and the [shared skill](../skills/session-bridge/SKILL.md). There is no collaboration-specific method group or hidden workflow engine.
 

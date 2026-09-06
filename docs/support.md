@@ -1,6 +1,6 @@
-# Support and validation
+# Troubleshooting and support
 
-This implementation connects local macOS sessions under one OS account. Node.js 24+ is required. The development compatibility baseline is Codex CLI 0.153.1 and Claude Code 2.1.261; a running client can be older than the binary on disk. Native-session evidence and its remaining gaps belong in the [live validation record](live-validation.md).
+This implementation connects local macOS sessions under one OS account. Node.js 24+ is required. The development compatibility baseline is Codex CLI 0.153.1 and Claude Code 2.1.261; a running client can be older than the binary on disk. Native-session evidence and its remaining gaps belong in the [live validation record](validation.md).
 
 ## Codex
 
@@ -62,7 +62,7 @@ Stop every older bridge receiver and MCP helper before opening their shared ledg
 
 The upgrade writes ledger schema 3 and preserves native identities, history and connection records. Older binaries cannot safely share the upgraded database; use v0.3.0 helpers consistently, including any `--legacy-tools` compatibility mode. A legacy endpoint still registered in the ledger is an explicit upgrade conflict, not evidence that a new inbox watcher is running. Inspect and stop that old attachment through the operator controls, then activate and reconnect only the intended peers.
 
-These repository changes do not replace the user's currently installed live plugin or mutate its ledger. Testing a separate checkout can use an isolated `SESSION_BRIDGE_HOME` until an explicit installation upgrade.
+Use an isolated `SESSION_BRIDGE_HOME` to try an update before upgrading a shared ledger.
 
 ## Troubleshooting
 
@@ -107,20 +107,6 @@ Use only v0.3.0 helpers against schema 3, even when exposing the legacy catalog.
 
 For compatibility with the previous interface, `mcp --host codex|claude --legacy-tools` exposes the previous ten tools instead of the default six. Legacy attachment tickets remain single-use; use the operator recovery flow for a lost legacy binding. Normal six-method callers use native IDs and do not manage those tickets. The old CLI attach/pair/receive/reply commands also remain; consult `--help` rather than mixing public native IDs with operator peer IDs.
 
-## What automated checks establish
+## Validation
 
-`npm run verify` exercises isolated ledger transitions, native addressing, per-call context, pagination, self-status, MCP calls and adapter failures. These checks do not establish that a real agent follows the skill or that every host consumes an idle notification. A successful model exchange must show the original destination receiving and reading a request, one substantive result, delivery back to the original sender, and both native sessions remaining under their original owners.
-
-## Live acceptance
-
-Use selected test sessions and a harmless bounded request. Record exact versions, native identities and evidence in [live-validation.md](live-validation.md). Cover:
-
-1. Explicit activation with native Monitor persistence, one-sided Codex bootstrap, and no enrollment when a new Claude terminal opens or lists peers.
-2. One request/reply in each direction while idle, without creating replacement model sessions.
-3. A busy recipient, multiple peers, stale self-status and disconnecting only one connection.
-4. Cancellation or disconnection before receipt, including an already queued notification.
-5. Receiver exit/crash and explicit restart in the same native conversation, retaining identity/history/connections and delivering queued unread messages; separately test `/clear` as a new identity.
-6. An interrupted or sandbox-blocked delivery that remains uncertain without automatic replay.
-7. A permission-gated request following the client's normal approval behavior.
-
-Only rows backed by observed native behavior count as live acceptance. Unit tests, a healthy receiver process and native queue submission are separate layers of evidence.
+See [validation](validation.md) for the tested baseline, automated coverage, native roundtrip evidence, and remaining client scenarios. A queue submission or healthy helper alone is not proof that a model read or completed a request. For isolated development and native trial guidance, see [contributing](../CONTRIBUTING.md).

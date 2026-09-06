@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { Store } from '../src/store.js';
 
-const NATIVE_ID = '01a07056-03b8-77b1-864a-470e8dcece14';
+const NATIVE_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 
 function fixture(t: TestContext) {
   const home = mkdtempSync(join(tmpdir(), 'session-bridge-store-'));

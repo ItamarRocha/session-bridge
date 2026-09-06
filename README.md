@@ -1,122 +1,120 @@
 # Session Bridge
 
-Connect existing Codex and Claude Code sessions by their native IDs. Each session can connect to multiple peers, publish a short “working on” line, and exchange bounded messages in its original conversation.
+[![Verify](https://github.com/ItamarRocha/session-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ItamarRocha/session-bridge/actions/workflows/ci.yml)
 
-The bridge keeps a local message ledger and delivers through Codex's `queue` command and Claude Code's native `Monitor` tool. It does not launch or resume model sessions. Claude's explicitly started receiver watches a durable SQLite inbox and survives normal turn boundaries. Small MCP and receiver helpers run alongside your clients; Codex delivery uses a brief CLI helper. Goals, tasks, model authentication and permissions stay with the official clients.
+**Connect your running Codex and Claude Code sessions.**
 
-**Status:** v0.3.0 keeps the six-method interface and adds durable Claude inbox delivery, receiver availability and restart continuity for one OS user on one machine. A native Claude-to-Codex request and return receipt are now confirmed; earlier evidence is versioned separately. Automated checks exercise isolated clients and state. Native busy and restart behavior still needs separate evidence; see the [live validation record](docs/live-validation.md) and [support guide](docs/support.md).
+Ask Claude to review a commit while Codex keeps building. Delegate a benchmark to another session. Share a result without copying it between terminals. Each session keeps its own conversation, tools, and permissions.
 
-| MCP method | Purpose |
-| --- | --- |
-| `bridge_connect` | Connect to a selected native session ID. |
-| `bridge_sessions_list` | List your connected peers and their latest status. |
-| `bridge_status_update` | Publish your own one-line status. |
-| `bridge_message_send` | Send a request, informational update or reply. |
-| `bridge_messages_read` | Read incoming messages or inspect an exchange. |
-| `bridge_disconnect` | Disconnect one peer; leave other connections intact. |
+```mermaid
+flowchart LR
+    Codex["Existing Codex task"] <--> Bridge["Session Bridge<br/>connections · messages · receipts"]
+    Bridge <--> Claude["Existing Claude Code session"]
+```
 
-[Visual guide](docs/collaboration-v2.html) · [Method contract](docs/plugin-methods.md) · [Collaboration design](docs/collaboration-v2.md)
+Sessions connect by their native IDs. Each can talk to multiple peers, publish a short “working on” status, and exchange requests, updates, and replies. The bridge uses Codex's native queue and Claude's native Monitor; small local helpers carry messages between the existing model sessions.
 
-## Build
+**v0.3.0 · experimental · local macOS sessions under one OS account.** A live Claude → Codex → Claude roundtrip is verified. Native busy-session and restart trials remain open; see [validation](docs/validation.md).
 
-Requires Node.js 24+, npm, Codex with `codex queue`, and interactive Claude Code with `Monitor` available. Both clients and all bridge helpers must use the same OS account and bridge data directory. Data defaults to `~/.local/state/session-bridge`; `SESSION_BRIDGE_HOME` or CLI `--home /absolute/path` selects another private local directory.
+## Quick start
+
+You need **Node.js 24+**, npm, a Codex client with `codex queue`, and interactive Claude Code with the native `Monitor` tool. Availability depends on the client and configuration; see [requirements](docs/getting-started.md#requirements).
+
+### 1. Build the bridge
+
+Keep the checkout in a permanent location: the plugin runs its built files directly.
 
 ```bash
-gh repo clone ItamarRocha/session-bridge
+git clone https://github.com/ItamarRocha/session-bridge.git
 cd session-bridge
 npm ci
-npm run verify
+npm run build
 node dist/cli.js doctor
 ```
 
-Keep this checkout in a durable location. The plugin needs the locally built `dist/cli.js` and installed `node_modules`; rebuild after updating source. Building does not change client configuration or replace the installed live plugin. Before opening an existing ledger with v0.3.0, stop all old bridge helpers: the upgrade writes schema 3 and older binaries must not share it. See [upgrading](docs/support.md#upgrading-to-v030).
+### 2. Load it into Claude
 
-Codex delivery inherits the launching environment's `CODEX_HOME` by default. If Claude runs under a different Codex account profile from the destination, set `SESSION_BRIDGE_CODEX_HOME` to the destination's absolute Codex home path when launching Claude or its bridge helper. This override affects the child Codex command only; it does not change Claude's environment or another client's settings. `doctor` checks Codex through that same child environment. `CODEX_SQLITE_HOME` or `sqlite_home` configuration can select a different queue directory; see [Codex profile routing](docs/support.md#codex-profile-routing). A successful submission to another profile's queue does not establish receipt.
-
-## Connect from an existing Claude session
-
-From the built checkout, install the personal Claude plugin:
+From that checkout, register a [personal directory plugin](https://code.claude.com/docs/en/plugins-reference#skills-directory-plugins):
 
 ```bash
 bridge_project="$PWD"
-mkdir -p "$HOME/.claude/skills"
-ln -s "$bridge_project" "$HOME/.claude/skills/session-bridge"
+bridge_plugin="$HOME/.claude/skills/session-bridge"
+if [ -e "$bridge_plugin" ] || [ -L "$bridge_plugin" ]; then
+  printf 'Inspect the existing plugin path before continuing: %s\n' "$bridge_plugin"
+else
+  mkdir -p "$HOME/.claude/skills"
+  ln -s "$bridge_project" "$bridge_plugin"
+fi
 ```
 
-The symlink command fails if that destination already exists. Inspect an existing installation before updating it.
+If the destination already exists, inspect it before replacing it. In your existing Claude conversation, run:
 
-In the existing Claude conversation, run `/reload-plugins`, then `/session-bridge:connect` when you want to activate its receiver. Opening another terminal or loading the plugin leaves its bridge dormant. The command uses Claude's native `Monitor` tool with `persistent: true` and this conversation's current native ID; a `PreToolUse` hook supplies that ID freshly for each bridge tool call. Users and models no longer exchange private attachment tickets. See Claude's [Monitor tool](https://code.claude.com/docs/en/tools-reference#monitor-tool), [skill substitutions](https://code.claude.com/docs/en/skills#available-string-substitutions) and [hook input](https://code.claude.com/docs/en/hooks#common-input-fields).
+```text
+/reload-plugins
+```
 
-You can supply a destination immediately:
+Loading the plugin makes the commands available. Receiver activation is explicit.
+
+### 3. Connect and send
+
+Ask your existing Codex task for its native ID—it comes from `CODEX_THREAD_ID` in that task's shell. Then, in Claude:
 
 ```text
 /session-bridge:connect codex:YOUR_CODEX_TASK_UUID
 ```
 
-Use `codex:UUID` for a Codex task that has not used the bridge yet. Connecting stores a pending connection silently. Claude's first message queues a notification to that task; the target can read it from its own shell and bind the connection without a reciprocal connect or MCP reload. Delivery still depends on the owning Codex client consuming its native queue. A UUID does not open an unloaded task. [Codex queue source](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/ext/queue/src/service.rs)
+Ask Claude:
 
-An already registered peer accepts its bare UUID, or a `codex:` / `claude:` prefix. An unknown bare UUID returns `activation_required`; the bridge does not guess its provider. A never-registered Claude target must first run `/session-bridge:connect` in that conversation. A registered target whose receiver is stopped can still be connected and receive queued messages; restarting its watcher is required for notification. A UUID alone is not a route to another machine.
+> Send the connected Codex task a connectivity test and ask it to reply “pong from Codex.”
 
-To list this conversation's connected peers, run:
+The first message notifies that Codex task; reading it binds the connection. A reciprocal connect is unnecessary. To see your peers and their status:
 
 ```text
 /session-bridge:sessions
 ```
 
-It shows native IDs, providers, saved connections, receiver availability and the latest self-reported status. A stopped receiver can have retained connections; listing shows those while pointing to explicit activation. Listing leaves an inactive bridge dormant. After updating the plugin, run `/reload-plugins` once to load the new command.
+For the Codex-first flow, client resume, optional MCP setup, shared data directories, or profile routing, follow the [setup guide](docs/getting-started.md). Existing users should read the [v0.3 upgrade steps](docs/support.md#upgrading-to-v030) before opening an older ledger.
 
-## Use an existing Codex task without reloading tools
+## Six methods
 
-Ask the task to read `skills/session-bridge/SKILL.md` from the checkout. It can use the CLI through its existing shell tool; caller identity comes from that task's own `CODEX_THREAD_ID`.
+| Method | Purpose |
+| --- | --- |
+| `bridge_connect` | Connect to one selected native session ID. |
+| `bridge_sessions_list` | See connected peers, receiver availability, and reported work. |
+| `bridge_status_update` | Publish your own short “working on” line. |
+| `bridge_message_send` | Send a bounded request, informational update, or reply. |
+| `bridge_messages_read` | Read incoming messages or inspect an exchange. |
+| `bridge_disconnect` | Disconnect one peer while keeping your other connections. |
 
-```bash
-node /absolute/path/session-bridge/dist/cli.js connect \
-  --host codex --target claude:CLAUDE_SESSION_UUID
+Goals, handoffs, and reviews stay in the agents' native task state and conversation. The [shared skill](skills/session-bridge/SKILL.md) explains how to delegate, review, and continue independent work with these methods. See the [method reference](docs/methods.md) for arguments and return values.
 
-node /absolute/path/session-bridge/dist/cli.js message-send \
-  --host codex --target claude:CLAUDE_SESSION_UUID \
-  --body-file /absolute/path/review-request.txt --key review-001
+## What delivery means
 
-node /absolute/path/session-bridge/dist/cli.js sessions --host codex
+```text
+Claude inbox:  queued → notified → read → replied
+Codex queue:   submitted → read → replied
 ```
 
-Replace placeholders with actual native UUIDs and file paths. A request should name the desired result, relevant snapshot and execution limits. The bridge stores only the message you provide; it does not copy transcripts or attach file contents automatically.
+A notification records submission of a message reference to the native stream or queue. A read records that the agent fetched it. A reply is the request's substantive result. None of these grants additional tool permissions.
 
-On notification, the destination uses `bridge_messages_read({messageId})`, completes the authorized request, then sends its one substantive result with `bridge_message_send({sessionId,text,idempotencyKey,replyTo})`. `sessionId` identifies the original sender and `replyTo` the original request. Receipt tokens stay internal. Use `expectsReply: false` for an informational update, such as handoff acceptance. Notices and replies need no courtesy response.
+Messages and connections survive a Claude receiver restart. Explicit reactivation in the same native conversation resumes eligible unread delivery; duplicate protection preserves the original exchange. A saved connection, receiver availability, and self-reported work status are separate facts.
 
-## Inspect or disconnect
+The bridge stores selected message text locally. Content may be processed by the receiving model provider. It works between sessions sharing one local ledger; cloud routing and automatic cross-agent permission approval are outside this version.
 
-```bash
-node dist/cli.js status-update --host codex --text "Reviewing the parser change."
-node dist/cli.js messages-read --host codex --message MESSAGE_ID
-node dist/cli.js disconnect --host codex --target PEER_SESSION_UUID
-```
+## Documentation
 
-Claude-bound sends are stored even while its receiver is unavailable. Restarting that receiver in the same native conversation preserves connections and history and processes eligible unread inbox entries. Incoming history includes previously read messages and receipt evidence. Inspect that evidence before repeating side effects. Selecting a sent message is read-only. `deliveryStage` separates `queued`, `notified`, `read` and `replied`. `notified` records a completed write to Claude's native receiver stream; only the agent's read records receipt. Codex `submitted` means its native queue accepted the notification. An `unknown` outcome requires inspection, not an automatic resend. [Message lifecycle](docs/design.md#message-lifecycle)
+| Guide | Read it for |
+| --- | --- |
+| [Getting started](docs/getting-started.md) | Installation, both connection directions, and configuration. |
+| [Method reference](docs/methods.md) | The six tools, identity, message limits, and receipts. |
+| [Collaboration](docs/collaboration.md) | Delegation, handoffs, and review examples. |
+| [Architecture](docs/architecture.md) | The ledger, receiver lifecycle, and native adapters. |
+| [Troubleshooting](docs/support.md) | Receiver recovery, profile routing, and upgrades. |
+| [Validation](docs/validation.md) | What automated checks and native trials establish. |
+| [Contributing](CONTRIBUTING.md) | Repository layout and development checks. |
 
-A receiver has a short ownership lease and reports `available`, `unavailable` or `unknown` independently of the saved connection. Its timestamps describe helper availability, not model activity. Status text remains a timestamped self-report. Disconnecting one peer fences pending bridge work on that connection; it does not undo completed actions or stop either native session.
+A [visual collaboration guide](docs/collaboration.html) is also included; open the local HTML file in a browser after cloning.
 
-## Optional Codex MCP installation
+## License
 
-For tasks that can load newly configured MCP tools:
-
-```bash
-bridge_project="$PWD"
-codex mcp add session-bridge -- node "$bridge_project/dist/cli.js" mcp --host codex
-mkdir -p "$HOME/.agents/skills"
-ln -s "$bridge_project/skills/session-bridge" "$HOME/.agents/skills/session-bridge"
-```
-
-Follow the host's refresh or session-start flow, then confirm the six methods above are available. The pinned Codex client sends current task identity in each MCP call's `_meta.threadId`; the bridge requires that fresh identity and never falls back to startup identity. If fresh native context is unavailable, use the CLI from the current task's shell. [Codex MCP call source](https://github.com/openai/codex/blob/rust-v0.153.1/codex-rs/core/src/mcp_tool_call.rs#L506)
-
-The `.codex-plugin` package also supports a personal marketplace installation. A packaged copy must include the locally built output and installed dependencies. Its MCP working directory is relative to the plugin root.
-
-## Compatibility and scope
-
-The default MCP catalog contains six methods. `mcp --host codex|claude --legacy-tools` explicitly opts into the old ten-tool catalog for compatibility with the previous interface. Legacy CLI operations remain available for diagnostics, exceptional cancellation and full receiver shutdown; see [operator recovery](docs/support.md#operator-recovery). Existing `sb_…` IDs remain internal/operator identifiers, not the new public session address.
-
-Connect only sessions within the user's authorized scope. Connections do not grant broader task or native permission authority. Local CLI access is operator authority under this OS account, not isolation against other processes running as you. Message contents may be processed by the receiving model provider. No bridge goal engine, workflow scheduler or automatic permission supervisor is included.
-
-[Architecture](docs/design.md) · [Support and validation](docs/support.md) · [Shared skill](skills/session-bridge/SKILL.md)
-
-Private project. `UNLICENSED`; no public distribution license is granted.
+The repository is currently `UNLICENSED`; a public-release license has not been selected. Source builds are supported; the package is not published to npm.
