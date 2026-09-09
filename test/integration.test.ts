@@ -126,19 +126,24 @@ test('real MCP clients and monitor complete one request/reply in the original Co
   assert.equal(repeated.claimId, received.claimId);
   assert.equal(repeated.alreadyClaimed, true);
   const reply = await tool(claude, 'bridge_reply', { messageId: request.id, claimId: received.claimId, body: 'One actionable finding.' });
-  assert.equal(reply.delivery, 'submitted');
+  assert.equal(reply.delivery, 'stored');
+  assert.equal(observer.notificationStatus(a.id).notification!.state, 'submitted');
   assert.equal(reply.to, a.id);
   const sameReply = await tool(claude, 'bridge_reply', { messageId: request.id, claimId: received.claimId, body: 'One actionable finding.' });
   assert.equal(sameReply.id, reply.id);
   const nativeCalls = readFileSync(fake.capture, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.equal(nativeCalls.length, 1, 'retry must not queue a duplicate native turn');
   assert.deepEqual(nativeCalls[0].slice(0, 4), ['queue', '--thread', sessionId, '--message']);
-  assert.ok(nativeCalls[0][4].includes(reply.id));
+  assert.ok(!nativeCalls[0][4].includes(reply.id), 'Native Codex receives one inbox token rather than an individual message wakeup.');
+  assert.ok(nativeCalls[0][4].includes('notificationToken'));
+  assert.ok(nativeCalls[0][4].includes('--notification-token'));
+  assert.ok(!nativeCalls[0][4].includes('sb_'));
   assert.ok(!nativeCalls[0][4].includes('One actionable finding.'));
   const fallback = nativeCalls[0][4].split('If that tool is unavailable, run: ')[1].split('. Use this session')[0];
   const fallbackReceipt = JSON.parse((await run('/bin/sh', ['-c', fallback], {env: {...env, CODEX_THREAD_ID: sessionId}})).stdout);
   assert.equal(fallbackReceipt.messages[0].messageId, reply.id, 'native notice must point at the sender-selected custom ledger');
   assert.equal(fallbackReceipt.messages[0].previouslyRead, false);
+  assert.deepEqual(fallbackReceipt.notification, { consumed: true, replayed: false, remaining: false });
   assert.equal((await tool(codex, 'bridge_receive', { messageId: reply.id })).alreadyClaimed, true);
   await assert.rejects(tool(codex, 'bridge_reply', { messageId: reply.id, claimId: 'no-loop', body: 'Thanks!' }), /Only a request/);
   const status = await tool(codex, 'bridge_status', { messageId: request.id });
@@ -151,7 +156,7 @@ test('real MCP clients and monitor complete one request/reply in the original Co
   await assert.rejects(tool(codex, 'bridge_send', { peerId: b.id, body: 'new work', idempotencyKey: 'review-2' }), /closed/);
 });
 
-test('unknown and interrupted submissions survive reopen without automatically retrying', async t => {
+test('an uncertain shared inbox notification survives reopen without resubmitting distinct messages', async t => {
   const home = mkdtempSync('/tmp/sb-ambiguous-');
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const fake = fakeCodex(home, 9);
@@ -162,17 +167,23 @@ test('unknown and interrupted submissions survive reopen without automatically r
   let bridge = new Bridge(store, 'claude', fake.command);
   bridge.bindLocalPeer(a.id);
   const input = { to: b.id, body: 'Review only', idempotencyKey: 'ambiguous' };
-  const message = await bridge.send(input);
-  assert.equal(message.delivery, 'unknown');
-  const interrupted = store.send(a.id, { ...input, idempotencyKey: 'crashed' });
-  assert.ok(store.beginDelivery(interrupted.id));
+  const first = await bridge.send(input);
+  assert.equal(first.delivery, 'stored');
+  const uncertain = store.notificationStatus(b.id).notification!;
+  assert.equal(uncertain.state, 'unknown');
+  const second = await bridge.send({ ...input, body: 'A separate meaningful finding.', idempotencyKey: 'second' });
+  assert.notEqual(second.id, first.id);
+  assert.equal(second.delivery, 'stored');
   store.close();
   store = new Store(home);
   t.after(() => store.close());
   bridge = new Bridge(store, 'claude', fake.command);
   bridge.bindLocalPeer(a.id);
-  assert.equal((await bridge.send(input)).delivery, 'unknown');
-  assert.equal((await bridge.send({ ...input, idempotencyKey: 'crashed' })).delivery, 'dispatching');
+  assert.equal((await bridge.send(input)).id, first.id);
+  const after = store.notificationStatus(b.id);
+  assert.equal(after.notification!.id, uncertain.id);
+  assert.equal(after.notification!.state, 'unknown');
+  assert.equal(after.unreadCount, 2);
   assert.equal(readFileSync(fake.capture, 'utf8').trim().split('\n').length, 1);
 });
 
@@ -199,4 +210,26 @@ test('existing-session CLI works without installing an MCP server', async t => {
   await cli('stop', '--self', a.id);
   const stopped = await cli('status', '--self', a.id, '--message', sent.id);
   assert.ok(stopped.message.cancelledAt);
+});
+
+test('empty or conflicting CLI notification arguments cannot record inbox receipts', async t => {
+  const home = mkdtempSync('/tmp/sb-cli-token-');
+  const store = new Store(home);
+  t.after(() => { store.close(); rmSync(home, {recursive: true, force: true}); });
+  const recipient = store.ensureCodexPeer({nativeSessionId: sessionId});
+  const sender = store.createPeer({host: 'claude', label: 'Isolated sender'}).peer;
+  store.pair(sender.id, recipient.id);
+  const message = store.send(sender.id, {to: recipient.id, body: 'Unread work', idempotencyKey: 'unread'});
+  const token = store.reserveNotification(recipient.id)!;
+  for (const args of [
+    ['--notification-token', ''],
+    ['--notification-token', token.id, '--message', ''],
+    ['--notification-token', token.id, '--cursor', ''],
+  ]) {
+    await assert.rejects(run(process.execPath, [...launch, 'messages-read', '--host', 'codex', '--home', home, ...args], {
+      env: {...env, CODEX_THREAD_ID: sessionId},
+    }), /notification|bounded batch/);
+    assert.equal(store.message(recipient.id, message.id).acknowledgedAt, null);
+    assert.equal(store.notificationStatus(recipient.id).notification?.id, token.id);
+  }
 });

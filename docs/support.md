@@ -40,7 +40,7 @@ If delivery remains `submitted`, inspect the exact message's bridge receipt and 
 
 ## Claude Code
 
-Use `/session-bridge:sessions` to list the current conversation's connected peers, receiver availability and latest reported status. Retained peers remain visible even when the current receiver needs explicit activation. The command reads all result pages without activating the bridge. Run `/reload-plugins` after updating the checkout to make a new command available in an existing conversation.
+Use `/session-bridge:sessions` to list the current conversation's connected peers, receiver availability, unread counts, notification state and latest reported status. Retained peers remain visible even when the current receiver needs explicit activation. The command reads all result pages without activating the bridge. Run `/reload-plugins` after updating the checkout to make a new command available in an existing conversation.
 
 Install the built checkout as a personal plugin and run `/reload-plugins` in the intended conversation. `/session-bridge:connect` is the explicit activation command. It starts Claude's native `Monitor` tool with `persistent: true` and `monitor --session-id "${CLAUDE_SESSION_ID}"`; no automatically declared plugin monitor starts on terminal creation. A regular background Bash process cannot replace native model notifications. [Monitor tool](https://code.claude.com/docs/en/tools-reference#monitor-tool), [skill substitutions](https://code.claude.com/docs/en/skills#available-string-substitutions)
 
@@ -48,21 +48,23 @@ The plugin's `PreToolUse` hook passes the current hook `session_id` to bridge ca
 
 The [Monitor tool](https://code.claude.com/docs/en/tools-reference#monitor-tool) is unavailable on Amazon Bedrock, Google Cloud's Agent Platform, Microsoft Foundry, and when `DISABLE_TELEMETRY` or `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set. Respect those host choices. This project does not change those flags or use private inbox protocols as a fallback.
 
-The receiver watches the durable SQLite inbox rather than a per-message Unix socket. Claude-bound messages can remain queued while it is unavailable. A completed stdout write records notification, and only an actual agent read records receipt. A new watcher can notify eligible unread entries from an earlier receiver generation again; agents inspect the existing receipt before continuing. Native Monitor persistence preserves the helper across turns, not an autonomous model loop.
+The receiver watches the durable SQLite inbox rather than a per-message Unix socket. Claude-bound messages can remain queued while it is unavailable. Notification submission is recorded in the inbox separately from each message. New messages remain queued until an actual agent read records receipt. Unread messages share one outstanding notification per native recipient and bridge directory. Its opaque token is consumed only by the delivered-notification read; ordinary polling does not clear it. A watcher restart can resume never-started pending submission. It preserves submitting/submitted/unknown state without re-emission, unlike v0.3 receiver replay. If a notification is stalled, inspect its state and recover stored work with ordinary unread/history reads rather than forcing another wakeup. Native Monitor persistence preserves the helper across turns, not an autonomous model loop.
 
 A normal receiver shutdown or crash preserves its native session identity, history and connections. Its ownership lease lasts five seconds and is renewed every second. After abrupt loss, availability becomes unavailable on lease expiry. Invoke `/session-bridge:connect` explicitly in that same conversation to restart; a retained connection does not require pairing again. If another watcher still owns the lease, reuse that watcher instead of launching a duplicate. `receiver.checkedAt` and `expiresAt` explain the observed availability; they do not measure model activity.
 
 The receiver, context hook and MCP helper need the same Node installation and bridge directory. If `node` is unavailable in the host launch environment, correct that environment or configure an absolute Node path consistently. Keep machine-specific paths out of shared commits.
 
-An existing receiver from an older installation does not disappear when configuration changes. Stop old helpers before upgrading as described below. For ordinary v0.3.0 watcher restart, use native Monitor controls; full operator `stop` intentionally closes connections. An old registration lacking a native ID cannot be addressed through the new native-ID methods.
+An existing receiver from an older installation does not disappear when configuration changes. Stop old helpers before upgrading as described below. For ordinary v0.4.0 watcher restart, use native Monitor controls; full operator `stop` intentionally closes connections. An old registration lacking a native ID cannot be addressed through the new native-ID methods.
 
-## Upgrading to v0.3.0
+## Upgrading to v0.4.0
 
-Stop every older bridge receiver and MCP helper before opening their shared ledger with v0.3.0. Reloading a plugin does not by itself establish that an old monitor exited. Check the native monitor/task controls and helper ownership first. Then build/load the new checkout and explicitly activate the intended Claude conversation.
+Stop every older bridge receiver and MCP helper before opening their shared ledger with v0.4.0. Reloading a plugin does not by itself establish that an old monitor exited. Check the native monitor/task controls and helper ownership first. Then build/load the new checkout and explicitly activate the intended Claude conversation.
 
-The upgrade writes ledger schema 3 and preserves native identities, history and connection records. Older binaries cannot safely share the upgraded database; use v0.3.0 helpers consistently, including any `--legacy-tools` compatibility mode. A legacy endpoint still registered in the ledger is an explicit upgrade conflict, not evidence that a new inbox watcher is running. Inspect and stop that old attachment through the operator controls, then activate and reconnect only the intended peers.
+The upgrade writes ledger schema 4 and preserves native identities, history and connections while adding inbox-notification state. Previously submitted or uncertain notices are not automatically replayed. Older binaries cannot safely share the upgraded database; use v0.4.0 helpers consistently, including any `--legacy-tools` compatibility mode. A legacy endpoint still registered in the ledger is an explicit upgrade conflict, not evidence that a new inbox watcher is running. Inspect and stop that old attachment through the operator controls, then activate and reconnect only the intended peers.
 
-Use an isolated `SESSION_BRIDGE_HOME` to try an update before upgrading a shared ledger.
+Prefer one permanent `SESSION_BRIDGE_HOME` for regular work. Each home has independent notification state; using several homes can queue several wakeups to the same native session. An isolated trial is still useful before upgrading, provided all trial participants use that directory and it remains available for reads.
+
+The native Codex queue cannot recall already queued items. An old or empty wakeup can still arrive after messages were read, canceled or disconnected, and pre-upgrade backlog may contain many notices. Read old message-ID notices with the legacy targeted read; process new notifications with their exact token. Empty results and replays need no acknowledgment. Upgrading does not remove the old native backlog.
 
 ## Troubleshooting
 
@@ -73,22 +75,30 @@ Use an isolated `SESSION_BRIDGE_HOME` to try an update before upgrading a shared
 | No Claude receiver after explicit connect | Check native `Monitor` availability, `persistent: true`, startup output and `self.receiver`. A ready native monitor is not itself message receipt. |
 | Connected peers remain but `activationRequired` is true | The saved relationships survived receiver loss. Explicitly invoke `/session-bridge:connect` in this conversation to restart the watcher. |
 | Receiver reports unavailable after a crash | Inspect its lease timestamps; abrupt loss can take up to five seconds to expire. Reuse a still-owned watcher or explicitly restart after expiry. |
-| Claude-bound send remains `queued` | The message is stored. Inspect the selected receiver's availability and activate it explicitly; keep the same message ID. |
-| Claude message is `notified` but not `read` | The notice reached the native stdout stream. The owning model has not recorded its read yet; inspect the original conversation. |
+| A sent message remains `queued` | Expected until receipt, even when its shared wakeup was submitted. Inspect send's `recipientInbox` or the session's `inbox`, then the original message's read/reply evidence. |
+| Inbox notification is submitted but a message is not read | The native stream/queue accepted a shared wakeup. Inspect the original conversation; notification submission is separate from receipt. |
 | New Claude conversation sees an old identity | Confirm the current plugin hook is loaded; missing fresh context must fail. Reactivate after `/clear`. |
 | Unknown bare UUID gives `activation_required` | Use `codex:UUID` for an unregistered Codex destination, or explicitly activate the selected Claude receiver. |
-| Connect returns `pending` | Connection is saved; connect itself sends nothing. The first message can notify the Codex target, and its eligible targeted read binds it. |
-| Codex stays at `submitted` | Inspect the exact message's receipt; compare the helper's Codex home and SQLite settings with the owning task, then inspect its native queue, loaded state, and pause or permission state. |
+| Connect returns `pending` | Connection is saved; connect itself sends nothing. The first message can notify the Codex target, and its eligible incoming read binds it. |
+| Codex inbox notification stays at `submitted` | Inspect the exact message's receipt; compare the helper's Codex home and SQLite settings with the owning task, then inspect its native queue, loaded state, and pause or permission state. |
 | Claude inherits another Codex account profile | Set an absolute `SESSION_BRIDGE_CODEX_HOME` for the intended destination and relaunch the helper. Inspect the original queued message before any new send. |
 | CLI can store a message but cannot queue it | Check the task shell's permission to access native Codex queue storage. |
-| Delivery is `unknown` | Inspect destination and ledger before considering a new request. No automatic resend occurs. |
+| Notification is submitting/submitted/unknown after receiver restart | Restart does not re-emit it. Inspect destination and inbox state, then use unread/history reads to recover stored work. Pending submission that never started may resume. |
 | History says `previouslyRead` or names a reply | Inspect prior work and existing result before repeating actions. |
 | A message has `blockedReason` | Inspect cancellation, original request expiry and connection state. Blocked history is not authority for new work. |
 | A result takes longer than 30 minutes | Reuse the original receipt. It is never reclaimed; one late result is allowed while the original request remains valid, normally for one hour, unless canceled/disconnected. |
+| More messages arrive but no extra wakeup appears | Inspect unread counts and notification state. Messages share the outstanding wakeup; only its delivered-token read consumes it and permits the next one. |
+| Manual polling read messages but the pending wakeup remains | Expected: polling cannot consume a native notification that may still be queued. Handle its token when it arrives; an empty result needs no reply. |
+| Notification reports replayed | Inspect prior receipt/result evidence. Replay results are non-actionable. Use targeted/history reads after inspecting prior work to recover an unfinished request; never use the old token to claim a new page or new keys to force a wakeup. |
+| Routine updates keep waking a peer | Publish progress with status updates; even informational notices are eligible to notify. |
 | A session status is old | It is the last self-report, not verified current activity. |
 | Both agents edited the same files | State file/snapshot ownership in the next bounded request. The bridge does not enforce work ownership. |
 
 ## Operator recovery
+
+Session lists expose `self.inbox` and each peer's `inbox`; sends return `recipientInbox`. These contain `unreadCount`, `pendingRequestCount` (including already-read unanswered requests), and `notification: {state, createdAt, detail, nativeQueueId} | null`. They intentionally omit the token. For a delivered token use `messages-read --notification-token TOKEN`; for manual recovery use `messages-read --unread-only`, retained history, or `--message MESSAGE_ID`. A token cannot combine with `--message` or `--cursor`.
+
+A send stores its message before reserving and submitting a notification. A crash between those steps can leave unread work with no notification. Retrying the identical send with its original idempotency key resumes dispatch without creating another message; an active Claude watcher also reserves on its next poll. Ordinary inbox reads can recover the stored work directly.
 
 The six methods cover normal collaboration. A routine watcher restart uses Claude's native Monitor controls and preserves connections. The local CLI keeps diagnostics, exceptional cancellation and full attachment closure:
 
@@ -103,7 +113,7 @@ node dist/cli.js stop --self PEER_ID
 
 Read `PEER_ID` from `peers`; these operator IDs still use `sb_…`. Inspect the native ID/provider before selecting one. `cancel` fences one request; `stop` closes that peer and all its connections, and its Claude monitor exits shortly afterward. Neither operation undoes external work or terminates a native model session. A full operator `stop` is different from receiver exit: it deliberately closes connections. Reusing that native identity afterward retains its history but requires explicit reconnection of those closed edges. Use ordinary native Monitor shutdown/restart when the intention is only to replace a watcher.
 
-Use only v0.3.0 helpers against schema 3, even when exposing the legacy catalog. The upgrade preserves existing peers, pairings and message evidence; old helpers must be stopped before migration.
+Use only v0.4.0 helpers against schema 4, even when exposing the legacy catalog. The upgrade preserves existing peers, pairings and message evidence; old helpers must be stopped before migration.
 
 For compatibility with the previous interface, `mcp --host codex|claude --legacy-tools` exposes the previous ten tools instead of the default six. Legacy attachment tickets remain single-use; use the operator recovery flow for a lost legacy binding. Normal six-method callers use native IDs and do not manage those tickets. The old CLI attach/pair/receive/reply commands also remain; consult `--help` rather than mixing public native IDs with operator peer IDs.
 

@@ -1,6 +1,6 @@
 # Validation
 
-Session Bridge v0.3.0 has automated protocol/process coverage and a confirmed native Claude → Codex → Claude exchange. These establish different layers of behavior: storing or submitting a message alone does not prove the destination agent read it.
+The v0.3.0 baseline has automated protocol/process coverage and a confirmed native Claude → Codex → Claude exchange. v0.4.0 adds inbox notification batching; its native acceptance is separate from that earlier result. These establish different layers of behavior: storing or submitting a message alone does not prove the destination agent read it.
 
 ## Tested baseline
 
@@ -18,7 +18,13 @@ Run the local gate with:
 npm run verify
 ```
 
-## Automated coverage
+## v0.4.0 notification acceptance
+
+The automated gate passes **120 tests** on Node.js 24.12.0, recorded 9 September 2026. The burst regression sends 20 distinct messages while reading proactively and verifies one outstanding native notification. Additional cases cover bounded successor pages, exact-token replay, empty-token rejection, historical native aliases and uncertain receiver output. Both plugin manifests validate.
+
+The updated contract groups unread messages behind one outstanding notification per native recipient and bridge directory. Validation must distinguish delivered-token consumption from manual polling, bound each notification read to one page, and retain prior receipt/replay evidence. A new native trial should send a burst, observe a single pending wakeup, process its bounded inbox page, and verify that remaining unread messages can notify without acknowledgment loops. Also verify that receiver restart preserves submitting/submitted/unknown notifications without re-emission and that targeted/history reads recover unfinished requests. Earlier live results do not establish those new behaviors. v0.4.0 currently has integration coverage only; a native acceptance result has not been recorded.
+
+## Automated coverage at v0.3.0
 
 Actual stdio MCP clients, CLI processes and receiver subprocesses exercise isolated ledgers: six methods, current-session identity, multiple peers, pagination, idempotency, receipts, cancellation/disconnect boundaries, routing and migration.
 

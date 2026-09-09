@@ -246,7 +246,7 @@ test('schema two historical native aliases retain receipts and idempotency witho
   assert.equal(store.sameSession(sameUuidOtherProvider.id, b.id), false);
   assert.throws(() => store.message(sameUuidOtherProvider.id, request.id), /participant/);
   const version = new DatabaseSync(join(f.home, 'bridge.sqlite'));
-  assert.equal(version.prepare('PRAGMA user_version').get()!.user_version, 3);
+  assert.equal(version.prepare('PRAGMA user_version').get()!.user_version, 4);
   version.close();
   assert.equal(f.open().message(a.id, request.id).claimId, receipt.claimId);
 });

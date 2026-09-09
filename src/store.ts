@@ -5,11 +5,11 @@ import {
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type {
-  Claim, ConnectedPeer, DeliveryResult, Host, Message, Pairing, Peer, ReceiverStatus, SendInput, StoreContract,
+  Claim, ConnectedPeer, DeliveryResult, Host, InboxNotification, Message, NotificationRead, Pairing, Peer, ReceiverStatus, SendInput, StoreContract,
 } from './types.js';
 
 type Row = Record<string, unknown>;
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const MAX_BODY_BYTES = 32 * 1024;
 const RECEIVER_LEASE_MS = 5_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -96,6 +96,14 @@ function messageRow(row: Row): Message {
   };
 }
 
+function notificationRow(row: Row): InboxNotification {
+  return {
+    id: String(row.id), to: String(row.to_peer), state: row.state as InboxNotification['state'],
+    createdAt: Number(row.created_at), consumedAt: row.consumed_at as number | null,
+    deliveryDetail: row.delivery_detail as string | null, nativeQueueId: row.native_queue_id as string | null,
+  };
+}
+
 export class Store implements StoreContract {
   readonly home: string;
   private readonly db: DatabaseSync;
@@ -151,7 +159,23 @@ export class Store implements StoreContract {
             ALTER TABLE peers ADD COLUMN receiver_expires_at INTEGER;
             ALTER TABLE messages ADD COLUMN notified_at INTEGER;
             ALTER TABLE messages ADD COLUMN notified_by TEXT;
-            PRAGMA user_version=${SCHEMA_VERSION};
+          `);
+        }
+        if (version < 4) {
+          this.db.exec(`
+            CREATE TABLE IF NOT EXISTS inbox_notifications (
+              id TEXT PRIMARY KEY, recipient_key TEXT NOT NULL, to_peer TEXT NOT NULL REFERENCES peers(id),
+              state TEXT NOT NULL CHECK (state IN ('pending','submitting','submitted','unknown')),
+              created_at INTEGER NOT NULL, consumed_at INTEGER, delivery_detail TEXT, native_queue_id TEXT,
+              dispatch_owner TEXT, successor_id TEXT REFERENCES inbox_notifications(id)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS outstanding_notification ON inbox_notifications(recipient_key)
+              WHERE consumed_at IS NULL;
+            CREATE TABLE IF NOT EXISTS notification_receipts (
+              notification_id TEXT NOT NULL REFERENCES inbox_notifications(id),
+              message_id TEXT NOT NULL REFERENCES messages(id), ordinal INTEGER NOT NULL,
+              PRIMARY KEY(notification_id,message_id), UNIQUE(notification_id,ordinal)
+            );
           `);
         }
         this.db.exec(`
@@ -159,6 +183,7 @@ export class Store implements StoreContract {
           CREATE INDEX IF NOT EXISTS peer_identity_history ON peers(host,native_session_id COLLATE NOCASE);
           CREATE INDEX IF NOT EXISTS message_history_from ON messages(from_peer,created_at DESC,id DESC);
           CREATE INDEX IF NOT EXISTS message_history_to ON messages(to_peer,created_at DESC,id DESC);
+          PRAGMA user_version=${SCHEMA_VERSION};
         `);
       });
       for (const suffix of ['', '-wal', '-shm']) {
@@ -387,6 +412,130 @@ export class Store implements StoreContract {
     });
   }
 
+  private eligibleIncoming(self: string, unreadOnly: boolean): {sql: string; params: (string | number)[]} {
+    const ids = this.identityIds(self);
+    return {
+      sql: `FROM messages m JOIN pairings p ON p.id=m.pairing_id
+        JOIN peers sender ON sender.id=m.from_peer JOIN peers receiver ON receiver.id=m.to_peer
+        WHERE m.to_peer IN (${ids.map(() => '?').join(',')})
+        AND p.closed_at IS NULL AND sender.closed_at IS NULL AND receiver.closed_at IS NULL
+        AND m.cancelled_at IS NULL AND m.expires_at>? ${unreadOnly ? 'AND m.acknowledged_at IS NULL' : ''}`,
+      params: [...ids, this.now()],
+    };
+  }
+
+  private unread(self: string, limit: number, storedOnly = false): Message[] {
+    const query = this.eligibleIncoming(self, true);
+    return this.db.prepare(`SELECT m.* ${query.sql} ${storedOnly ? "AND m.delivery='stored'" : ''}
+      ORDER BY m.created_at,m.id LIMIT ?`).all(...query.params, limit).map(messageRow);
+  }
+
+  private notificationKey(peer: Peer): string | null {
+    return peer.nativeSessionId === null ? null : `${peer.host}:${peer.nativeSessionId.toLowerCase()}`;
+  }
+
+  private reserveInboxNotification(to: string, includePreviouslyDispatched = false): InboxNotification | null {
+    const peer = this.peer(to), key = this.notificationKey(peer);
+    if (key === null) return null;
+    const active = this.findNativePeer(peer.nativeSessionId!, peer.host);
+    // Message reads and expiry cannot retract a native queue item; only its token read retires the slot.
+    const existing = this.db.prepare('SELECT * FROM inbox_notifications WHERE recipient_key=? AND consumed_at IS NULL').get(key);
+    if (existing) return notificationRow(existing);
+    if (!active || !this.unread(active.id, 1, !includePreviouslyDispatched).length) return null;
+    const id = `notification_${randomUUID()}`;
+    this.db.prepare(`INSERT INTO inbox_notifications(id,recipient_key,to_peer,state,created_at)
+      VALUES(?,?,?,'pending',?)`).run(id, key, active.id, this.now());
+    return notificationRow(this.db.prepare('SELECT * FROM inbox_notifications WHERE id=?').get(id)!);
+  }
+
+  reserveNotification(to: string): InboxNotification | null {
+    return this.transaction(() => this.reserveInboxNotification(to));
+  }
+
+  private notificationOwner(row: Row, ownerToken?: string): {owner: string | null; peer: Peer} | null {
+    const recipient = this.peer(String(row.to_peer));
+    const peer = recipient.nativeSessionId && this.findNativePeer(recipient.nativeSessionId, recipient.host);
+    if (!peer) return null;
+    if (peer.host === 'codex') return {owner: null, peer};
+    if (!ownerToken) return null;
+    const owner = hash(ownerToken);
+    const lease = this.db.prepare(`SELECT id FROM peers WHERE id=? AND receiver_owner=?
+      AND receiver_expires_at>? AND closed_at IS NULL`).get(peer.id, owner, this.now());
+    return lease ? {owner, peer} : null;
+  }
+
+  beginNotificationDelivery(id: string, ownerToken?: string): boolean {
+    return this.transaction(() => {
+      const row = this.db.prepare('SELECT * FROM inbox_notifications WHERE id=? AND consumed_at IS NULL').get(id);
+      if (!row || row.state !== 'pending') return false;
+      const receiver = this.notificationOwner(row, ownerToken);
+      if (!receiver || !this.unread(receiver.peer.id, 1).length) return false;
+      return Number(this.db.prepare(`UPDATE inbox_notifications SET state='submitting',dispatch_owner=?,
+        delivery_detail=NULL,native_queue_id=NULL WHERE id=? AND consumed_at IS NULL AND state='pending'`)
+        .run(receiver.owner, id).changes) === 1;
+    });
+  }
+
+  finishNotificationDelivery(id: string, result: DeliveryResult, ownerToken?: string): void {
+    if (!['stored', 'submitted', 'unknown'].includes(result.state)) throw new Error('Invalid delivery result state');
+    if (typeof result.detail !== 'string') throw new Error('Delivery detail must be text');
+    if (result.nativeQueueId !== undefined && result.nativeQueueId !== null) text(result.nativeQueueId, 'Native queue ID', 512);
+    this.transaction(() => {
+      const row = this.db.prepare('SELECT * FROM inbox_notifications WHERE id=? AND consumed_at IS NULL').get(id);
+      if (!row || row.state !== 'submitting') return;
+      const receiver = this.notificationOwner(row, ownerToken);
+      if (!receiver || receiver.owner !== row.dispatch_owner) return;
+      this.db.prepare(`UPDATE inbox_notifications SET state=?,delivery_detail=?,native_queue_id=? WHERE id=?`)
+        .run(result.state === 'stored' ? 'pending' : result.state, result.detail.slice(0, 4096), result.nativeQueueId ?? null, id);
+    });
+  }
+
+  consumeNotification(self: string, id: string, limit = 20): NotificationRead {
+    seconds(limit, 'Notification read limit', 100);
+    return this.transaction(() => {
+      const row = this.db.prepare('SELECT * FROM inbox_notifications WHERE id=?').get(id);
+      if (!row) throw new Error('Unknown inbox notification');
+      if (!this.sameSession(self, String(row.to_peer))) throw new Error('Only the recipient can read an inbox notification');
+      const recipient = this.peer(self);
+      if (recipient.nativeSessionId !== null) this.findNativePeer(recipient.nativeSessionId, recipient.host);
+      if (row.consumed_at !== null) {
+        // Replaying a receipt must not consume newer arrivals or retire a successor notification.
+        const claims = this.db.prepare(`SELECT m.* FROM notification_receipts r JOIN messages m ON m.id=r.message_id
+          WHERE r.notification_id=? ORDER BY r.ordinal`).all(id).map(messageRow)
+          .map(message => ({message, claimId: message.claimId!, alreadyClaimed: true}));
+        const successor = row.successor_id === null ? undefined : this.db.prepare(`SELECT * FROM inbox_notifications
+          WHERE id=? AND consumed_at IS NULL`).get(String(row.successor_id));
+        return {claims, consumed: false, notification: successor ? notificationRow(successor) : null,
+          remaining: this.unread(self, 1).length > 0};
+      }
+      const messages = this.unread(self, limit);
+      const claims = messages.map((message, ordinal) => {
+        const claim = this.claimMessage(self, message.id, 1800);
+        this.db.prepare('INSERT INTO notification_receipts(notification_id,message_id,ordinal) VALUES(?,?,?)')
+          .run(id, message.id, ordinal);
+        return claim;
+      });
+      this.db.prepare('UPDATE inbox_notifications SET consumed_at=? WHERE id=?').run(this.now(), id);
+      const remaining = this.unread(self, 1).length > 0;
+      const notification = remaining ? this.reserveInboxNotification(self, true) : null;
+      if (notification) this.db.prepare('UPDATE inbox_notifications SET successor_id=? WHERE id=?').run(notification.id, id);
+      return {claims, consumed: true, notification, remaining};
+    });
+  }
+
+  notificationStatus(self: string): {unreadCount: number; pendingRequestCount: number; notification: InboxNotification | null} {
+    return this.transaction(() => {
+      const peer = this.peer(self), key = this.notificationKey(peer);
+      if (peer.nativeSessionId !== null) this.findNativePeer(peer.nativeSessionId, peer.host);
+      const query = this.eligibleIncoming(self, false);
+      const counts = this.db.prepare(`SELECT COUNT(CASE WHEN m.acknowledged_at IS NULL THEN 1 END) AS unread,
+        COUNT(CASE WHEN m.kind='request' AND m.answered_by IS NULL THEN 1 END) AS pending ${query.sql}`).get(...query.params)!;
+      const row = key === null ? undefined : this.db.prepare(`SELECT * FROM inbox_notifications
+        WHERE recipient_key=? AND consumed_at IS NULL`).get(key);
+      return {unreadCount: Number(counts.unread), pendingRequestCount: Number(counts.pending), notification: row ? notificationRow(row) : null};
+    });
+  }
+
   attach(ticket: string): Peer {
     text(ticket, 'Attach ticket', 256);
     return this.transaction(() => {
@@ -524,7 +673,7 @@ export class Store implements StoreContract {
       AND p.closed_at IS NULL AND sender.closed_at IS NULL ORDER BY m.created_at,m.id`).all(self, this.now()).map(messageRow);
   }
 
-  incoming(self: string, input: {limit?: number; after?: {createdAt: number; id: string}} = {}): Message[] {
+  incoming(self: string, input: {limit?: number; after?: {createdAt: number; id: string}; unreadOnly?: boolean} = {}): Message[] {
     this.activePeer(self);
     const ids = this.identityIds(self), placeholders = ids.map(() => '?').join(',');
     const limit = input.limit ?? 100;
@@ -532,11 +681,12 @@ export class Store implements StoreContract {
     if (input.after) {
       text(input.after.id, 'Incoming cursor ID', 128);
       if (!Number.isSafeInteger(input.after.createdAt)) throw new Error('Incoming cursor timestamp must be a safe integer');
-      return this.db.prepare(`SELECT * FROM messages WHERE to_peer IN (${placeholders}) AND (created_at,id)>(?,?)
-        ORDER BY created_at,id LIMIT ?`).all(...ids, input.after.createdAt, input.after.id, limit).map(messageRow);
     }
-    return this.db.prepare(`SELECT * FROM messages WHERE to_peer IN (${placeholders}) ORDER BY created_at,id LIMIT ?`)
-      .all(...ids, limit).map(messageRow);
+    const query = input.unreadOnly ? this.eligibleIncoming(self, true)
+      : {sql: `FROM messages m WHERE m.to_peer IN (${placeholders})`, params: ids};
+    return this.db.prepare(`SELECT m.* ${query.sql} ${input.after ? 'AND (m.created_at,m.id)>(?,?)' : ''}
+      ORDER BY m.created_at,m.id LIMIT ?`)
+      .all(...query.params, ...(input.after ? [input.after.createdAt, input.after.id] : []), limit).map(messageRow);
   }
 
   history(self: string, limit = 100): Message[] {
@@ -553,19 +703,21 @@ export class Store implements StoreContract {
 
   claim(self: string, id: string, leaseSeconds = 1800): Claim {
     seconds(leaseSeconds, 'Lease seconds', 3600);
-    return this.transaction(() => {
-      const message = this.rawMessage(id);
-      if (!this.sameSession(message.to, self)) throw new Error('Only the recipient can claim a message');
-      this.eligible(message);
-      if (message.claimId !== null) {
-        return { message, claimId: message.claimId, alreadyClaimed: true };
-      }
-      const claimId = `claim_${randomUUID()}`;
-      const now = this.now();
-      this.db.prepare('UPDATE messages SET acknowledged_at=?,claim_id=?,claim_expires_at=? WHERE id=?')
-        .run(now, claimId, Math.min(now + leaseSeconds * 1000, message.expiresAt), id);
-      return { message: this.rawMessage(id), claimId, alreadyClaimed: false };
-    });
+    return this.transaction(() => this.claimMessage(self, id, leaseSeconds));
+  }
+
+  private claimMessage(self: string, id: string, leaseSeconds: number): Claim {
+    const message = this.rawMessage(id);
+    if (!this.sameSession(message.to, self)) throw new Error('Only the recipient can claim a message');
+    this.eligible(message);
+    if (message.claimId !== null) {
+      return { message, claimId: message.claimId, alreadyClaimed: true };
+    }
+    const claimId = `claim_${randomUUID()}`;
+    const now = this.now();
+    this.db.prepare('UPDATE messages SET acknowledged_at=?,claim_id=?,claim_expires_at=? WHERE id=?')
+      .run(now, claimId, Math.min(now + leaseSeconds * 1000, message.expiresAt), id);
+    return { message: this.rawMessage(id), claimId, alreadyClaimed: false };
   }
 
   reply(self: string, id: string, claimId: string, body: string, idempotencyKey?: string): Message {
