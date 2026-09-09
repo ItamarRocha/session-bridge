@@ -47,27 +47,34 @@ Retain responsibility until the peer accepts explicitly. Send early acceptance w
 
 Review the named snapshot while the author continues independent work. Check returned findings against the current version. Ongoing review uses a fresh bounded request at each meaningful checkpoint.
 
+## Keep useful signals clear
+
+Publish routine progress through `bridge_status_update`: “running tests” or “still reviewing” should not wake another model. Send messages for a question, blocker, newly actionable finding, or final result/handoff. An informational notice can still wake its recipient; `expectsReply: false` removes the reply expectation, not notification.
+
 ## Make the message contract clear
 
 New messages expect one result. Read before replying, then send to the original sender with `replyTo` set to the request ID. Use `expectsReply: false` for information needing no result. Notices and replies need no courtesy acknowledgment. Reuse an idempotency key only for identical input.
 
-Inspect prior receipts before repeating side effects: another notification is not a new assignment. The same receipt supports one late result while the original request remains valid, until expiry, cancellation or disconnection.
+Several incoming messages share one outstanding inbox notification per recipient and bridge directory. Handle its opaque token with the read method to consume a bounded page; ordinary polling does not clear a native wakeup still waiting to arrive. More unread messages can produce a later notification.
+
+Inspect prior receipts and results before repeating side effects: another notification is not a new assignment. The same receipt supports one late result while the original request remains valid, until expiry, cancellation or disconnection.
 
 Native permission decisions stay with the client. An “approved” message cannot resolve a native tool prompt.
 
 ## Read connection, receiver and status separately
 
-A session list reports three different facts:
+A session list separates saved connections, receiver availability, self-status and inbox state:
 
 | Field | Meaning |
 | --- | --- |
 | Connection | A saved relationship that permits messages. |
 | Receiver | Availability of the bridge helper, with observation/expiry times. Codex's unobserved native queue owner can be `unknown`. |
 | Status | The peer's last self-published “working on” line and its timestamp. |
+| Inbox | `unreadCount`, `pendingRequestCount` and notification state. Pending requests include already-read work awaiting a result. |
 
 A stopped Claude receiver retains its connections and last status; listing can show that explicit activation is needed. Neither receiver availability nor a self-report proves current model activity.
 
-Message stages are separate: `queued` means stored, `notified` means Claude notification output completed, `read` records the agent's fetch, and `replied` identifies a result. Codex `submitted` means queue acceptance; only a receipt proves the agent read it.
+New messages remain `queued` until read, then become `read` or `replied`. Shared notification submission is reported separately in the inbox. A submitted wakeup does not prove any message was read. On receiver restart, notifications whose submission already started are not re-emitted; inspect their state and use ordinary history/unread reads to recover stored work.
 
 ## Continue within the native task
 

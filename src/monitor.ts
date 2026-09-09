@@ -1,6 +1,7 @@
 import { basename } from 'node:path';
 import { Store } from './store.js';
-import { messageNotice } from './transport.js';
+import { inboxNotice, messageNotice } from './transport.js';
+import type { InboxNotification } from './types.js';
 
 export interface MonitorOptions {
   pollIntervalMs?: number;
@@ -22,6 +23,7 @@ export async function startMonitor(
   }
   const store = new Store(home);
   let receiver: ReturnType<Store['acquireReceiver']> | undefined;
+  let inFlight: InboxNotification | undefined;
   let poll: NodeJS.Timeout | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
   let closed = false;
@@ -38,8 +40,13 @@ export async function startMonitor(
     clearInterval(heartbeat);
     abort.abort();
     let cleanupError: unknown;
+    try {
+      if (inFlight && receiver) store.finishNotificationDelivery(inFlight.id, {
+        state: 'unknown', detail: 'Native notification output did not complete; inspect the inbox before recovery.',
+      }, receiver.ownerToken);
+    } catch (error) { cleanupError = error; }
     try { if (receiver) store.releaseReceiver(receiver.peer.id, receiver.ownerToken); }
-    catch (error) { cleanupError = error; }
+    catch (error) { cleanupError ??= error; }
     try { store.close(); } catch (error) { cleanupError ??= error; }
     if (failure !== undefined || cleanupError !== undefined) rejectDone(failure ?? cleanupError);
     else resolveDone();
@@ -80,14 +87,27 @@ export async function startMonitor(
     const check = async () => {
       if (closed) return;
       try {
-        for (let count = 0; count < 20 && !closed; count++) {
-          const message = store.pendingNotifications(peer.id, ownerToken, 1)[0];
-          if (!message) break;
-          await write(messageNotice(message, home, peer));
-          if (closed) return;
-          if (!store.markNotified(peer.id, ownerToken, message.id) && !store.renewReceiver(peer.id, ownerToken)) {
-            stop();
-            return;
+        if (peer.nativeSessionId) {
+          const notification = store.reserveNotification(peer.id);
+          if (notification && store.beginNotificationDelivery(notification.id, ownerToken)) {
+            inFlight = notification;
+            await write(inboxNotice(notification, home, store.peer(notification.to)));
+            if (closed) return;
+            store.finishNotificationDelivery(notification.id, {
+              state: 'submitted', detail: 'Written to the native receiver notification stream; model receipt is pending.',
+            }, ownerToken);
+            inFlight = undefined;
+          }
+        } else {
+          for (let count = 0; count < 20 && !closed; count++) {
+            const message = store.pendingNotifications(peer.id, ownerToken, 1)[0];
+            if (!message) break;
+            await write(messageNotice(message, home, peer));
+            if (closed) return;
+            if (!store.markNotified(peer.id, ownerToken, message.id) && !store.renewReceiver(peer.id, ownerToken)) {
+              stop();
+              return;
+            }
           }
         }
         if (!closed) poll = setTimeout(() => { void check(); }, pollIntervalMs);

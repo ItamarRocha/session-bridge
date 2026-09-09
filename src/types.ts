@@ -71,6 +71,24 @@ export interface Claim {
 export interface DeliveryResult {
   state: 'submitted' | 'unknown' | 'stored';
   detail: string;
+  nativeQueueId?: string | null;
+}
+
+export interface InboxNotification {
+  id: string;
+  to: string;
+  state: 'pending' | 'submitting' | 'submitted' | 'unknown';
+  createdAt: number;
+  consumedAt: number | null;
+  deliveryDetail: string | null;
+  nativeQueueId?: string | null;
+}
+
+export interface NotificationRead {
+  claims: Claim[];
+  consumed: boolean;
+  notification: InboxNotification | null;
+  remaining: boolean;
 }
 
 export interface StoreContract {
@@ -85,6 +103,11 @@ export interface StoreContract {
   receiverStatus(peerId: string): ReceiverStatus;
   pendingNotifications(peerId: string, ownerToken: string, limit?: number): Message[];
   markNotified(peerId: string, ownerToken: string, messageId: string): boolean;
+  reserveNotification(to: string): InboxNotification | null;
+  beginNotificationDelivery(id: string, ownerToken?: string): boolean;
+  finishNotificationDelivery(id: string, result: DeliveryResult, ownerToken?: string): void;
+  consumeNotification(self: string, id: string, limit?: number): NotificationRead;
+  notificationStatus(self: string): {unreadCount: number; pendingRequestCount: number; notification: InboxNotification | null};
   attach(ticket: string): Peer;
   peer(id: string): Peer;
   peers(): Peer[];
@@ -98,7 +121,7 @@ export interface StoreContract {
   send(self: string, input: SendInput): Message;
   message(self: string, id: string): Message;
   inbox(self: string): Message[];
-  incoming(self: string, input?: {limit?: number; after?: {createdAt: number; id: string}}): Message[];
+  incoming(self: string, input?: {limit?: number; after?: {createdAt: number; id: string}; unreadOnly?: boolean}): Message[];
   history(self: string, limit?: number): Message[];
   claim(self: string, id: string, leaseSeconds?: number): Claim;
   reply(self: string, id: string, claimId: string, body: string, idempotencyKey?: string): Message;

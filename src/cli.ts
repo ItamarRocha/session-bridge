@@ -19,7 +19,7 @@ session-bridge connect --host codex|claude --target [codex:|claude:]UUID
 session-bridge sessions --host codex|claude [--limit N] [--cursor CURSOR]
 session-bridge status-update --host codex|claude --text TEXT
 session-bridge message-send --host codex|claude --target UUID --key KEY --body-file PATH [--reply-to MESSAGE | --notice]
-session-bridge messages-read --host codex|claude [--message MESSAGE] [--limit N] [--cursor CURSOR]
+session-bridge messages-read --host codex|claude [--message MESSAGE | --notification-token TOKEN | --unread-only] [--limit N] [--cursor CURSOR]
 session-bridge disconnect --host codex|claude --target UUID
 
 Codex commands use the current shell's CODEX_THREAD_ID. Claude commands require a fresh
@@ -50,11 +50,12 @@ async function main() {
   const options: ParseArgsOptionsConfig = Object.fromEntries([
     'home', 'host', 'session-id', 'label', 'self', 'peer', 'message', 'claim', 'pairing',
     'body', 'body-file', 'key', 'kind', 'ttl-seconds', 'codex-command',
-    'target', 'text', 'reply-to', 'limit', 'cursor',
+    'target', 'text', 'reply-to', 'limit', 'cursor', 'notification-token',
   ].map(name => [name, { type: 'string' }]));
   options.help = { type: 'boolean' };
   options['legacy-tools'] = {type: 'boolean'};
   options.notice = {type: 'boolean'};
+  options['unread-only'] = {type: 'boolean'};
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     strict: true,
@@ -156,7 +157,14 @@ async function main() {
         case 'sessions': print(sessions.list({limit: option('limit') === undefined ? undefined : Number(option('limit')), cursor: option('cursor')})); break;
         case 'status-update': print(sessions.updateStatus(required('text'))); break;
         case 'message-send': print(await sessions.send({sessionId: required('target'), text: body(), idempotencyKey: required('key'), replyTo: option('reply-to'), expectsReply: values.notice ? false : undefined})); break;
-        case 'messages-read': print(sessions.read({messageId: option('message'), limit: option('limit') === undefined ? undefined : Number(option('limit')), cursor: option('cursor')})); break;
+        case 'messages-read': {
+          const limit = option('limit') === undefined ? undefined : Number(option('limit'));
+          const notificationToken = option('notification-token');
+          if (notificationToken !== undefined && (option('message') !== undefined || option('cursor') !== undefined)) throw new Error('A notification read uses its own bounded batch; omit --message and --cursor.');
+          print(notificationToken !== undefined ? await sessions.readNotification(required('notification-token'), limit)
+            : sessions.read({messageId: option('message'), limit, cursor: option('cursor'), unreadOnly: Boolean(values['unread-only'])}));
+          break;
+        }
         case 'disconnect': print(sessions.disconnect(required('target'))); break;
       }
       return;

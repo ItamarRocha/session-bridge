@@ -200,7 +200,8 @@ test('one-sided Codex invitation binds only the notified native recipient withou
   assert.equal(unavailable.state, 'activation_required');
   assert.equal(f.store.findNativePeer(DORMANT_CLAUDE), null);
   const request = await f.claudeA.send({ sessionId: `codex:${DORMANT_CODEX}`, text: 'Please review this selected context.', idempotencyKey: 'invite-review' });
-  assert.equal(request.delivery, 'submitted');
+  assert.equal(request.delivery, 'stored');
+  assert.equal(request.recipientInbox.notification?.state, 'submitted');
   const invocation = f.queued()[0]!;
   assert.deepEqual(invocation.slice(0, 4), ['queue', '--thread', DORMANT_CODEX, '--message']);
   assert.equal(invocation.length, 5);
@@ -289,12 +290,14 @@ test('uncertain native delivery remains inspectable and is not repeated on an id
   await f.claudeA.connect(CODEX_A);
   const input = { sessionId: CODEX_A, text: 'Run this bounded check.', idempotencyKey: 'uncertain' };
   const first = await f.claudeA.send(input);
-  assert.equal(first.delivery, 'unknown');
+  assert.equal(first.delivery, 'stored');
+  assert.equal(first.recipientInbox.notification?.state, 'unknown');
   assert.equal(f.claudeA.read({ messageId: first.messageId }).messages[0]!.acknowledgedAt, null);
   assert.equal((await f.claudeA.send(input)).messageId, first.messageId);
   assert.equal(f.queued().length, 1);
   assert.equal(f.codexA.read({ messageId: first.messageId }).messages[0]!.previouslyRead, false);
-  assert.equal(f.claudeA.read({ messageId: first.messageId }).messages[0]!.delivery, 'unknown');
+  assert.equal(f.claudeA.read({ messageId: first.messageId }).messages[0]!.deliveryStage, 'read');
+  assert.equal(f.codexA.list().self!.inbox.notification?.state, 'unknown');
 });
 
 

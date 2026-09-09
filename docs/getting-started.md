@@ -24,7 +24,7 @@ npm run build
 node dist/cli.js doctor
 ```
 
-Keep this checkout in a permanent location. `dist/` and `node_modules/` are generated locally and are required at runtime. A source archive or plugin manifest alone is insufficient. Rebuild after updating source; use [the upgrade procedure](support.md#upgrading-to-v030) when an older helper or ledger is involved.
+Keep this checkout in a permanent location. `dist/` and `node_modules/` are generated locally and are required at runtime. A source archive or plugin manifest alone is insufficient. Rebuild after updating source; use [the upgrade procedure](support.md#upgrading-to-v040) when an older helper or ledger is involved.
 
 `doctor` checks runtime versions, native queue help, and the selected Codex profile. It does not send a message or establish model receipt.
 
@@ -70,7 +70,7 @@ This is a client launch/resume option, not attachment to an already running proc
 
 1. Ask the existing Codex task for its own native ID, available as `CODEX_THREAD_ID` in that task's shell. A separate ordinary terminal is not the source of that task's identity.
 2. In Claude, run `/session-bridge:connect codex:YOUR_CODEX_TASK_UUID`. This explicitly starts its native Monitor receiver when needed and saves the connection.
-3. Ask Claude to send a bounded request. The first eligible targeted read binds the Codex recipient without a reciprocal connect. If Codex lacks the MCP tool, its notification includes an absolute CLI fallback.
+3. Ask Claude to send a bounded request. Reading the delivered inbox notification binds the Codex recipient without a reciprocal connect. If Codex lacks the MCP tool, its notification includes an absolute CLI fallback.
 4. Confirm that the reply was read in the original Claude conversation. Submission alone is not the end-to-end result.
 
 An initial `pending` connection is expected for a Codex task that has not attached yet. Its client must still consume the native queue; connecting does not open an unloaded task.
@@ -96,16 +96,20 @@ A never-registered Claude target needs its initial activation. A registered targ
 
 ## List, update, or disconnect
 
-In Claude, `/session-bridge:sessions` shows connected peers, receiver availability, and their latest reported work. It leaves an inactive receiver inactive.
+In Claude, `/session-bridge:sessions` shows connected peers, receiver availability, unread counts, notification state and their latest reported work. It leaves an inactive receiver inactive.
 
 From a connected Codex task's shell:
 
 ```bash
 node /absolute/path/session-bridge/dist/cli.js sessions --host codex
 node /absolute/path/session-bridge/dist/cli.js status-update --host codex --text "Reviewing the parser."
+node /absolute/path/session-bridge/dist/cli.js messages-read --host codex --notification-token DELIVERED_TOKEN
+node /absolute/path/session-bridge/dist/cli.js messages-read --host codex --unread-only
 node /absolute/path/session-bridge/dist/cli.js messages-read --host codex --message MESSAGE_ID
 node /absolute/path/session-bridge/dist/cli.js disconnect --host codex --target PEER_NATIVE_UUID
 ```
+
+Status exposes inbox counts and notification state without its opaque token. `DELIVERED_TOKEN` comes from the native notice. The default read remains incoming history. Use `bridge_messages_read({unreadOnly: true})` for manual unread inspection. When handling a delivered notification, pass its `notificationToken` exactly as provided; ordinary polling does not consume the pending wakeup. A token implies an unread page, default 20 and maximum 100; omit `messageId`/`cursor` or CLI `--message`/`--cursor`. Its result includes `notification: {consumed, replayed, remaining}`, `inbox`, and `nextCursor: null`. Replayed messages are non-actionable; inspect prior work and use history or `messageId` to recover unfinished requests.
 
 Native IDs may be provider-prefixed. Use `codex:UUID` for an unregistered Codex destination; unknown bare UUIDs cannot identify their provider. Disconnecting one peer keeps other connections and both native sessions intact.
 
@@ -119,7 +123,7 @@ Native IDs may be provider-prefixed. Use `codex:UUID` for an unregistered Codex 
 
 Set launch-time variables consistently before starting the relevant helpers. If Claude was launched by a profile manager, verify that Codex delivery targets the profile owning the selected task. Native `sqlite_home` or `CODEX_SQLITE_HOME` settings can further select queue storage; see [profile routing](support.md#codex-profile-routing).
 
-For an isolated trial, choose a private directory and give that same path to all participants. A selected Codex task's notification includes the ledger path in its CLI fallback. Keep the trial ledger available while testing receipt and restart recovery.
+Prefer one permanent bridge directory for normal use. Each directory has its own notification state, so several test ledgers can each queue a wakeup to the same native task. For an isolated trial, choose a private directory and give that same path to all participants. A selected Codex task's notification includes the ledger path in its CLI fallback. Keep the trial ledger available while testing receipt and restart recovery.
 
 ## Optional Codex MCP installation
 

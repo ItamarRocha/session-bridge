@@ -12,9 +12,9 @@ flowchart LR
     Bridge <--> Claude["Existing Claude Code session"]
 ```
 
-Sessions connect by their native IDs. Each can talk to multiple peers, publish a short “working on” status, and exchange requests, updates, and replies. The bridge uses Codex's native queue and Claude's native Monitor; small local helpers carry messages between the existing model sessions.
+Sessions connect by their native IDs. Each can talk to multiple peers, publish quiet “working on” status, and exchange meaningful requests and results. Incoming messages share one outstanding inbox notification per recipient and bridge directory. The bridge uses Codex's native queue and Claude's native Monitor; small local helpers carry messages between the existing model sessions.
 
-**v0.3.0 · experimental · local macOS sessions under one OS account.** A live Claude → Codex → Claude roundtrip is verified. Native busy-session and restart trials remain open; see [validation](docs/validation.md).
+**v0.4.0 · experimental · local macOS sessions under one OS account.** A native Claude → Codex → Claude roundtrip was verified on v0.3.0. Notification batching is new in v0.4.0 and needs its own native acceptance trial; see [validation](docs/validation.md).
 
 ## Quick start
 
@@ -73,7 +73,7 @@ The first message notifies that Codex task; reading it binds the connection. A r
 /session-bridge:sessions
 ```
 
-For the Codex-first flow, client resume, optional MCP setup, shared data directories, or profile routing, follow the [setup guide](docs/getting-started.md). Existing users should read the [v0.3 upgrade steps](docs/support.md#upgrading-to-v030) before opening an older ledger.
+For the Codex-first flow, client resume, optional MCP setup, shared data directories, or profile routing, follow the [setup guide](docs/getting-started.md). Existing users should read the [v0.4 upgrade steps](docs/support.md#upgrading-to-v040) before opening an older ledger.
 
 ## Six methods
 
@@ -86,18 +86,20 @@ For the Codex-first flow, client resume, optional MCP setup, shared data directo
 | `bridge_messages_read` | Read incoming messages or inspect an exchange. |
 | `bridge_disconnect` | Disconnect one peer while keeping your other connections. |
 
-Goals, handoffs, and reviews stay in the agents' native task state and conversation. The [shared skill](skills/session-bridge/SKILL.md) explains how to delegate, review, and continue independent work with these methods. See the [method reference](docs/methods.md) for arguments and return values.
+Use status for routine progress. Send a message when a peer needs to answer a question, resolve a blocker, consider a new actionable finding, or receive a final result/handoff. Goals, handoffs, and reviews stay in the agents' native task state and conversation. The [shared skill](skills/session-bridge/SKILL.md) explains how to delegate, review, and continue independent work with these methods. See the [method reference](docs/methods.md) for arguments and return values.
 
 ## What delivery means
 
 ```text
-Claude inbox:  queued → notified → read → replied
-Codex queue:   submitted → read → replied
+Message:       queued → read → replied
+Notification:  pending → submitting → submitted or unknown
 ```
 
-A notification records submission of a message reference to the native stream or queue. A read records that the agent fetched it. A reply is the request's substantive result. None of these grants additional tool permissions.
+Several messages share one inbox wakeup. Sending returns `recipientInbox`; session listings expose `self.inbox` and each peer's `inbox`. They contain unread and pending-request counts plus notification state. A message can remain `queued` after the shared notification was submitted; only its read records receipt. Pending-request counts include requests already read but not answered.
 
-Messages and connections survive a Claude receiver restart. Explicit reactivation in the same native conversation resumes eligible unread delivery; duplicate protection preserves the original exchange. A saved connection, receiver availability, and self-reported work status are separate facts.
+A delivered notification carries an opaque token, which is deliberately absent from status responses. Reading with that token consumes one bounded page and permits another wakeup if unread messages remain. Ordinary polling does not consume it. Token replays report prior reads with `actionable: false`; inspect the original request through history or a targeted read before resuming unfinished work.
+
+Messages and connections survive Claude receiver restart. Pending notifications whose submission never started can resume. Notifications already `submitting`, `submitted` or `unknown` are preserved without re-emission. This conservative behavior replaces the v0.3 restart replay: inspect visible notification state and use ordinary history/unread reads to recover stored work when needed. Native queue backlog cannot be recalled.
 
 The bridge stores selected message text locally. Content may be processed by the receiving model provider. It works between sessions sharing one local ledger; cloud routing and automatic cross-agent permission approval are outside this version.
 

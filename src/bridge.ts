@@ -1,4 +1,4 @@
-import type { Host, Message, Peer, SendInput, StoreContract } from './types.js';
+import type { Host, InboxNotification, Message, Peer, SendInput, StoreContract } from './types.js';
 import { deliverCodex } from './transport.js';
 
 export class Bridge {
@@ -100,16 +100,20 @@ export class Bridge {
 
   async dispatch(message: Message): Promise<Message> {
     const peer = this.store.peer(message.to);
-    if (peer.host === 'claude' || !this.store.beginDelivery(message.id)) {
-      return this.store.message(message.from, message.id);
-    }
-    try {
-      const result = await deliverCodex(peer, message, { command: this.codexCommand, home: this.store.home });
-      this.store.finishDelivery(message.id, result);
-    } catch {
-      this.store.finishDelivery(message.id, { state: 'unknown', detail: 'Transport failed unexpectedly; delivery may have happened. No automatic retry.' });
-    }
+    if (peer.nativeSessionId) await this.dispatchNotification(this.store.reserveNotification(peer.id));
     return this.store.message(message.from, message.id);
+  }
+
+  async dispatchNotification(notification: InboxNotification | null): Promise<void> {
+    if (!notification) return;
+    const peer = this.store.peer(notification.to);
+    if (peer.host !== 'codex' || !this.store.beginNotificationDelivery(notification.id)) return;
+    try {
+      const result = await deliverCodex(peer, notification, { command: this.codexCommand, home: this.store.home });
+      this.store.finishNotificationDelivery(notification.id, result);
+    } catch {
+      this.store.finishNotificationDelivery(notification.id, { state: 'unknown', detail: 'Transport failed unexpectedly; delivery may have happened. No automatic retry.' });
+    }
   }
 }
 

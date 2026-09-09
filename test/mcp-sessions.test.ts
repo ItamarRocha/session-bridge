@@ -14,6 +14,7 @@ import type { Host } from '../src/types.js';
 
 type Listed = ReturnType<Sessions['list']>;
 type Received = ReturnType<Sessions['read']>;
+type NotificationReceived = Awaited<ReturnType<Sessions['readNotification']>>;
 type Sent = Awaited<ReturnType<Sessions['send']>>;
 type Connected = Awaited<ReturnType<Sessions['connect']>>;
 
@@ -22,6 +23,7 @@ const OTHER_CODEX_ID = '77777777-7777-4777-8777-777777777777';
 const CLAUDE_ID = '66666666-6666-4666-8666-666666666666';
 const CLEARED_CLAUDE_ID = '88888888-8888-4888-8888-888888888888';
 const STALE_ID = '99999999-9999-4999-8999-999999999999';
+const NATIVE_QUEUE_ID = '12345678-1234-4234-8234-123456789012';
 const entry = resolve('dist/cli.js');
 const publicMethods = [
   'bridge_connect', 'bridge_sessions_list', 'bridge_status_update',
@@ -57,12 +59,26 @@ function currentClaudeInput(name: string, args: Record<string, unknown>, session
   return result.hookSpecificOutput.updatedInput;
 }
 
+function notificationToken(line: string): string {
+  const match = /\{"notificationToken":"([^"\n]+)"\}/.exec(line);
+  assert.ok(match, 'The native notice must identify its inbox notification.');
+  assert.ok(!line.includes('msg_'), 'A native inbox notice does not identify individual messages.');
+  assert.ok(!line.includes('sb_'), 'A native notice does not expose internal peer identities.');
+  return match[1]!;
+}
+
+function assertPublic(value: unknown, token?: string) {
+  const serialized = JSON.stringify(value);
+  for (const privateField of ['sb_', 'ownerToken', 'claimId', 'claimExpiresAt']) assert.ok(!serialized.includes(privateField));
+  if (token) assert.ok(!serialized.includes(token), 'Proactive results do not disclose the outstanding notification token.');
+}
+
 function fixture(t: TestContext) {
   const home = mkdtempSync('/tmp/sb-mcp-native-');
   writeFileSync(join(home, 'ipc'), 'No socket directory is available to this sender or receiver.', { mode: 0o600 });
   const capture = join(home, 'native-queue.jsonl');
   const command = join(home, 'fake-codex');
-  writeFileSync(command, `#!${process.execPath}\nconst fs = require('node:fs');fs.appendFileSync(${JSON.stringify(capture)}, JSON.stringify(process.argv.slice(2))+'\\n');\n`, { mode: 0o700 });
+  writeFileSync(command, `#!${process.execPath}\nconst fs = require('node:fs');const args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(capture)}, JSON.stringify(args)+'\\n');console.log('Queued message ${NATIVE_QUEUE_ID} for thread '+args[2]+'.');\n`, { mode: 0o700 });
   const cleanups: Array<() => void | Promise<void>> = [];
   const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
   delete env.CODEX_THREAD_ID;
@@ -127,7 +143,11 @@ test('default stdio MCP exposes six methods and refuses missing current-session 
   const codex = await f.client('codex');
   const claude = await f.client('claude', true);
   for (const client of [codex, claude]) {
-    assert.deepEqual((await client.listTools()).tools.map(method => method.name).sort(), publicMethods);
+    const catalog = (await client.listTools()).tools;
+    assert.deepEqual(catalog.map(method => method.name).sort(), publicMethods);
+    const readSchema = catalog.find(method => method.name === 'bridge_messages_read')!.inputSchema;
+    assert.ok(readSchema.properties?.notificationToken);
+    assert.ok(readSchema.properties?.unreadOnly);
     await assert.rejects(tool(client, 'bridge_sessions_list'), /native session context is unavailable/);
     await assert.rejects(tool(client, 'bridge_attach', { sessionId: CODEX_ID }), /not found/i);
   }
@@ -153,14 +173,21 @@ test('two real MCP clients and native-ID monitor exchange requests using fresh p
   assert.deepEqual(f.queued(), []);
   const input = { sessionId: CODEX_ID, text: 'Review selected commit abc123. Return findings only.', idempotencyKey: 'native-review' };
   const request = await claudeTool<Sent>('bridge_message_send', input);
-  assert.equal(request.delivery, 'submitted');
+  assert.equal(request.delivery, 'stored');
+  assert.equal(request.deliveryStage, 'queued');
+  assert.equal(request.recipientInbox.notification!.state, 'submitted');
+  assert.equal(request.recipientInbox.notification!.nativeQueueId, NATIVE_QUEUE_ID);
   assert.equal(request.from.sessionId, CLAUDE_ID);
   assert.equal(request.to.sessionId, CODEX_ID);
   assert.equal(request.acknowledgedAt, null);
   assert.deepEqual(f.queued()[0]!.slice(0, 4), ['queue', '--thread', CODEX_ID, '--message']);
-  assert.ok(f.queued()[0]![4]!.includes(request.messageId));
+  const requestToken = notificationToken(f.queued()[0]![4]!);
+  assertPublic(request, requestToken);
+  await assert.rejects(tool(codex, 'bridge_messages_read', { notificationToken: requestToken }), /native session context is unavailable/);
+  await assert.rejects(claudeTool('bridge_messages_read', { notificationToken: requestToken }), /recipient|notification|token/i);
   assert.ok(!f.queued()[0]![4]!.includes(input.text));
-  const read = await tool<Received>(codex, 'bridge_messages_read', { messageId: request.messageId }, CODEX_ID);
+  const read = await tool<NotificationReceived>(codex, 'bridge_messages_read', { notificationToken: requestToken }, CODEX_ID);
+  assert.deepEqual(read.notification, { consumed: true, replayed: false, remaining: false });
   assert.equal(read.messages[0]!.previouslyRead, false);
   assert.equal(read.messages[0]!.text, input.text);
   assert.equal((await tool<Listed>(codex, 'bridge_sessions_list', {}, CODEX_ID)).self!.sessionId, CODEX_ID);
@@ -169,17 +196,25 @@ test('two real MCP clients and native-ID monitor exchange requests using fresh p
   const resultInput = { sessionId: CLAUDE_ID, replyTo: request.messageId, text: 'One finding at parser.ts:12.', idempotencyKey: 'native-result' };
   const result = await tool<Sent>(codex, 'bridge_message_send', resultInput, CODEX_ID);
   assert.equal(result.acknowledgedAt, null);
-  const notice = await receiver.notice(line => line.includes(result.messageId));
+  const notice = await receiver.notice(line => line.includes('notificationToken'));
+  const resultToken = notificationToken(notice);
   assert.ok(notice.includes('bridge_messages_read'));
   assert.ok(!notice.includes(result.text));
   const notified = await waitFor(
-    () => tool<Received>(codex, 'bridge_messages_read', { messageId: result.messageId }, CODEX_ID),
-    value => value.messages[0]!.delivery === 'submitted', 'Claude notification evidence',
+    () => claudeTool<Listed>('bridge_sessions_list'),
+    value => value.self!.inbox.notification?.state === 'submitted', 'Claude notification evidence',
   );
-  assert.equal(typeof notified.messages[0]!.notifiedAt, 'number');
-  assert.equal(notified.messages[0]!.acknowledgedAt, null, 'Writing a native notice does not record model receipt.');
+  assertPublic(notified, resultToken);
+  const inspected = await tool<Received>(codex, 'bridge_messages_read', { messageId: result.messageId }, CODEX_ID);
+  assert.equal(inspected.messages[0]!.delivery, 'stored');
+  assert.equal(inspected.messages[0]!.acknowledgedAt, null, 'Writing a native notice does not record model receipt.');
   assert.equal((await tool<Sent>(codex, 'bridge_message_send', resultInput, CODEX_ID)).messageId, result.messageId);
-  const answer = await claudeTool<Received>('bridge_messages_read', { messageId: result.messageId });
+  await assert.rejects(claudeTool('bridge_messages_read', { notificationToken: resultToken }, CLEARED_CLAUDE_ID), /Activation required/);
+  const answer = await claudeTool<NotificationReceived>('bridge_messages_read', { notificationToken: resultToken });
+  assert.equal(answer.notification.consumed, true);
+  const replay = await claudeTool<NotificationReceived>('bridge_messages_read', { notificationToken: resultToken });
+  assert.equal(replay.notification.replayed, true);
+  assert.ok(replay.messages.every(message => !message.actionable));
   assert.equal(answer.messages[0]!.from.sessionId, CODEX_ID);
   assert.equal(answer.messages[0]!.previouslyRead, false);
   assert.equal(answer.messages[0]!.actionable, false);
@@ -192,7 +227,7 @@ test('two real MCP clients and native-ID monitor exchange requests using fresh p
   assert.equal(listed.sessions[0]!.status!.text, status.status!.text);
   assert.equal(listed.sessions[0]!.status!.source, 'self_report');
   assert.equal(f.queued().length, 1, 'Status and listing do not notify models.');
-  assert.equal(receiver.lines.filter(line => line.includes(result.messageId)).length, 1);
+  assert.equal(receiver.lines.filter(line => line.includes(resultToken)).length, 1);
 
   const nextContext = await tool<Listed>(codex, 'bridge_sessions_list', {}, OTHER_CODEX_ID);
   assert.equal(nextContext.activationRequired, true, 'A shared MCP connection cannot leak the last caller identity into another task.');
@@ -216,7 +251,7 @@ test('two real MCP clients and native-ID monitor exchange requests using fresh p
   assert.equal(readFileSync(join(f.home, 'ipc'), 'utf8'), 'No socket directory is available to this sender or receiver.');
 });
 
-test('a killed receiver expires and explicit restart delivers durable unread messages without replaying receipts', { timeout: 25_000 }, async t => {
+test('receiver restart retains one outstanding notification and durable unread recovery without replaying receipts', { timeout: 25_000 }, async t => {
   const f = fixture(t);
   const firstReceiver = await f.monitor();
   const codex = await f.client('codex', true);
@@ -228,9 +263,7 @@ test('a killed receiver expires and explicit restart delivers durable unread mes
   assert.equal(before.activationRequired, false);
   assert.equal(before.self!.receiver.state, 'available');
   assert.equal(before.self!.receiver.transport, 'inbox');
-  assert.equal(before.sessions[0]!.receiver.state, 'unknown', 'A Codex registration does not prove that its native client is loaded.');
-  assert.equal(before.self!.sessionId, CLAUDE_ID);
-  assert.equal(before.sessions.length, 1);
+  assert.equal(before.sessions[0]!.receiver.state, 'unknown');
   const registration = () => {
     const store = new Store(f.home);
     try {
@@ -240,77 +273,155 @@ test('a killed receiver expires and explicit restart delivers durable unread mes
     } finally { store.close(); }
   };
   const originalRegistration = registration();
-  const inspect = (messageId: string) => tool<Received>(codex, 'bridge_messages_read', { messageId }, CODEX_ID);
   const completed = await tool<Sent>(codex, 'bridge_message_send', {
     sessionId: CLAUDE_ID, text: 'Review the first snapshot.', idempotencyKey: 'completed-request',
   }, CODEX_ID);
-  await firstReceiver.notice(line => line.includes(completed.messageId));
-  const firstRead = await claudeTool<Received>('bridge_messages_read', { messageId: completed.messageId });
+  const completedToken = notificationToken(await firstReceiver.notice(line => line.includes('notificationToken')));
+  const firstRead = await claudeTool<NotificationReceived>('bridge_messages_read', { notificationToken: completedToken });
+  assert.equal(firstRead.messages[0]!.messageId, completed.messageId);
   assert.equal(firstRead.messages[0]!.previouslyRead, false);
   const resultInput = {
     sessionId: CODEX_ID, text: 'The first snapshot has no findings.', replyTo: completed.messageId, idempotencyKey: 'completed-result',
   };
   const result = await claudeTool<Sent>('bridge_message_send', resultInput);
-  assert.equal(result.delivery, 'submitted');
-  await tool(codex, 'bridge_messages_read', { messageId: result.messageId }, CODEX_ID);
-
+  assert.equal(result.delivery, 'stored');
+  assert.equal(result.recipientInbox.notification!.state, 'submitted');
+  await tool(codex, 'bridge_messages_read', { notificationToken: notificationToken(f.queued()[0]![4]!) }, CODEX_ID);
   const unread = await tool<Sent>(codex, 'bridge_message_send', {
     sessionId: CLAUDE_ID, text: 'Review the next snapshot.', idempotencyKey: 'unread-request',
   }, CODEX_ID);
-  await firstReceiver.notice(line => line.includes(unread.messageId));
+  const unreadToken = notificationToken(await firstReceiver.notice(line => line.includes('notificationToken') && !line.includes(completedToken)));
   const firstNotice = await waitFor(
-    () => inspect(unread.messageId), value => typeof value.messages[0]!.notifiedAt === 'number', 'the first durable notice',
+    () => claudeTool<Listed>('bridge_sessions_list'), value => value.self!.inbox.notification?.state === 'submitted', 'the outstanding inbox notice',
   );
-  assert.equal(firstNotice.messages[0]!.delivery, 'submitted');
-  assert.equal(firstNotice.messages[0]!.acknowledgedAt, null);
+  assert.equal(firstNotice.self!.inbox.unreadCount, 1);
   await firstReceiver.stop('SIGKILL');
-
   const offline = await waitFor(
     () => claudeTool<Listed>('bridge_sessions_list'), value => value.activationRequired, 'the killed receiver lease to expire', 7_000,
   );
-  assert.equal(offline.self!.sessionId, CLAUDE_ID, 'Losing the receiver does not delete the logical session.');
+  assert.equal(offline.self!.sessionId, CLAUDE_ID);
   assert.equal(offline.self!.receiver.state, 'unavailable');
   assert.deepEqual(offline.self!.status, before.self!.status);
-  assert.equal(offline.sessions[0]!.sessionId, CODEX_ID);
   assert.deepEqual(registration(), originalRegistration);
   const queued = await tool<Sent>(codex, 'bridge_message_send', {
     sessionId: CLAUDE_ID, text: 'Keep this request until the receiver returns.', idempotencyKey: 'offline-request',
   }, CODEX_ID);
   assert.equal(queued.delivery, 'stored');
-  assert.equal(queued.notifiedAt, null);
   assert.equal(queued.acknowledgedAt, null);
-  await assert.rejects(tool(claude, 'bridge_messages_read', { messageId: queued.messageId }), /native session context is unavailable/);
-
+  assert.equal(queued.recipientInbox.unreadCount, 2);
+  assert.deepEqual(queued.recipientInbox.notification, firstNotice.self!.inbox.notification);
   const restarted = await f.monitor();
-  await restarted.notice(line => line.includes(unread.messageId));
-  await restarted.notice(line => line.includes(queued.messageId));
-  const secondNotice = await waitFor(
-    () => inspect(unread.messageId), value => value.messages[0]!.notifiedAt !== firstNotice.messages[0]!.notifiedAt,
-    'the unread notification to be recorded by the replacement receiver',
+  const resumed = await claudeTool<Listed>('bridge_sessions_list');
+  assert.equal(resumed.activationRequired, false);
+  assert.deepEqual(resumed.self!.inbox.notification, firstNotice.self!.inbox.notification);
+  const after = await waitFor(
+    () => claudeTool<Listed>('bridge_sessions_list'),
+    value => value.self!.receiver.checkedAt! > resumed.self!.receiver.checkedAt!, 'the restarted receiver heartbeat',
   );
-  assert.equal(secondNotice.messages[0]!.acknowledgedAt, null);
-  const queuedNotice = await waitFor(
-    () => inspect(queued.messageId), value => value.messages[0]!.delivery === 'submitted', 'the offline request notification',
-  );
-  assert.equal(queuedNotice.messages[0]!.acknowledgedAt, null);
-  const after = await claudeTool<Listed>('bridge_sessions_list');
-  assert.equal(after.activationRequired, false);
   assert.equal(after.self!.receiver.state, 'available');
-  assert.equal(after.self!.sessionId, CLAUDE_ID);
-  assert.deepEqual(registration(), originalRegistration, 'Explicit restart retains the original peer and connection.');
-  assert.equal(restarted.lines.filter(line => line.includes(completed.messageId)).length, 0, 'An acknowledged request does not generate a restart notification.');
-  assert.equal(restarted.lines.filter(line => line.includes(unread.messageId)).length, 1);
-  assert.equal(restarted.lines.filter(line => line.includes(queued.messageId)).length, 1);
-
-  const recovered = await claudeTool<Received>('bridge_messages_read', { messageId: unread.messageId });
-  assert.equal(recovered.messages[0]!.messageId, unread.messageId);
-  assert.equal(recovered.messages[0]!.previouslyRead, false, 'A prior native notification was not a receipt.');
-  await claudeTool('bridge_messages_read', { messageId: queued.messageId });
+  assert.deepEqual(registration(), originalRegistration);
+  assert.equal(restarted.lines.filter(line => line.includes('notificationToken')).length, 0, 'Restart cannot append a duplicate wakeup that may still be queued natively.');
+  const recovered = await claudeTool<Received>('bridge_messages_read', { unreadOnly: true });
+  assert.deepEqual(new Set(recovered.messages.map(message => message.messageId)), new Set([unread.messageId, queued.messageId]));
+  assert.ok(recovered.messages.every(message => !message.previouslyRead));
   const history = await claudeTool<Received>('bridge_messages_read', { messageId: completed.messageId });
   assert.equal(history.messages[0]!.previouslyRead, true);
   assert.equal(history.messages[0]!.acknowledgedAt, firstRead.messages[0]!.acknowledgedAt);
   assert.equal(history.messages[0]!.answeredBy, result.messageId);
+  const delayed = await claudeTool<NotificationReceived>('bridge_messages_read', { notificationToken: unreadToken });
+  assert.deepEqual(delayed.messages, []);
+  assert.deepEqual(delayed.notification, { consumed: true, replayed: false, remaining: false });
   assert.equal((await claudeTool<Sent>('bridge_message_send', resultInput)).messageId, result.messageId);
-  assert.equal(f.queued().length, 1, 'Inspecting history or retrying a recorded result never sends a second terminal reply.');
+  assert.equal(f.queued().length, 1);
   assert.equal(readFileSync(join(f.home, 'ipc'), 'utf8'), 'No socket directory is available to this sender or receiver.');
+});
+
+test('twenty distinct sends and proactive reads share one outstanding Codex notification until its delivered token is consumed', { timeout: 20_000 }, async t => {
+  const f = fixture(t);
+  await f.monitor();
+  const codex = await f.client('codex', true);
+  const claude = await f.client('claude', true);
+  const claudeTool = <T>(name: string, args: Record<string, unknown> = {}) => tool<T>(claude, name, currentClaudeInput(name, args));
+  await tool(codex, 'bridge_connect', { sessionId: CLAUDE_ID }, CODEX_ID);
+  const sentIds = new Set<string>();
+  const readIds = new Set<string>();
+  for (let index = 0; index < 20; index++) {
+    const message = await claudeTool<Sent>('bridge_message_send', {
+      sessionId: CODEX_ID, text: `Review experiment checkpoint ${index}.`, idempotencyKey: `burst-${index}`,
+    });
+    sentIds.add(message.messageId);
+    assert.equal(message.delivery, 'stored');
+    assert.equal(message.deliveryStage, 'queued');
+    assert.equal(message.acknowledgedAt, null);
+    assert.equal(message.recipientInbox.unreadCount, index % 5 + 1);
+    assert.equal(message.recipientInbox.pendingRequestCount, index + 1);
+    assert.equal(message.recipientInbox.notification!.state, 'submitted');
+    assert.equal(message.recipientInbox.notification!.nativeQueueId, NATIVE_QUEUE_ID);
+    assert.equal(f.queued().length, 1, 'New messages cannot append native turns behind an outstanding wakeup.');
+    assertPublic(message);
+    if (index % 5 === 4) {
+      const proactive = await tool<Received>(codex, 'bridge_messages_read', { unreadOnly: true }, CODEX_ID);
+      assert.equal(proactive.messages.length, 5);
+      for (const receipt of proactive.messages) {
+        assert.equal(receipt.previouslyRead, false);
+        readIds.add(receipt.messageId);
+      }
+      assert.ok(!('notification' in proactive), 'Ordinary polling cannot consume the queued wakeup.');
+    }
+  }
+  assert.equal(sentIds.size, 20);
+  assert.deepEqual(readIds, sentIds);
+  const token = notificationToken(f.queued()[0]![4]!);
+  const before = await tool<Listed>(codex, 'bridge_sessions_list', {}, CODEX_ID);
+  assert.equal(before.self!.inbox.unreadCount, 0);
+  assert.equal(before.self!.inbox.pendingRequestCount, 20);
+  assert.equal(before.self!.inbox.notification!.state, 'submitted');
+  assertPublic(before, token);
+  await assert.rejects(tool(codex, 'bridge_messages_read', { notificationToken: 'missing-notification' }, CODEX_ID), /notification|token/i);
+  const delivered = await tool<NotificationReceived>(codex, 'bridge_messages_read', { notificationToken: token, unreadOnly: true }, CODEX_ID);
+  assert.deepEqual(delivered.messages, [], 'A late wakeup sees an empty inbox after proactive receipts.');
+  assert.deepEqual(delivered.notification, { consumed: true, replayed: false, remaining: false });
+  assert.equal(f.queued().length, 1);
+  const replay = await tool<NotificationReceived>(codex, 'bridge_messages_read', { notificationToken: token }, CODEX_ID);
+  assert.equal(replay.notification.replayed, true);
+  assert.equal(replay.notification.consumed, false);
+  assert.ok(replay.messages.every(message => !message.actionable));
+  assert.equal(f.queued().length, 1);
+  const newer = await claudeTool<Sent>('bridge_message_send', {
+    sessionId: CODEX_ID, text: 'A meaningful new finding after the first wakeup was handled.', idempotencyKey: 'later-finding',
+  });
+  assert.equal(f.queued().length, 2);
+  const newToken = notificationToken(f.queued()[1]![4]!);
+  assert.notEqual(newToken, token);
+  const oldReplay = await tool<NotificationReceived>(codex, 'bridge_messages_read', { notificationToken: token }, CODEX_ID);
+  assert.ok(!oldReplay.messages.some(message => message.messageId === newer.messageId));
+  assert.ok(oldReplay.messages.every(message => !message.actionable));
+  const waiting = await tool<Listed>(codex, 'bridge_sessions_list', {}, CODEX_ID);
+  assert.equal(waiting.self!.inbox.unreadCount, 1);
+  assert.equal(waiting.self!.inbox.notification!.state, 'submitted');
+  const newRead = await tool<NotificationReceived>(codex, 'bridge_messages_read', { notificationToken: newToken }, CODEX_ID);
+  assert.deepEqual(newRead.messages.map(message => message.messageId), [newer.messageId]);
+  assert.equal(newRead.messages[0]!.actionable, true);
+  assert.equal(f.queued().length, 2);
+  const bounded = [];
+  for (let index = 0; index < 2; index++) bounded.push(await claudeTool<Sent>('bridge_message_send', {
+    sessionId: CODEX_ID, text: `Separate bounded page item ${index}.`, idempotencyKey: `bounded-${index}`,
+  }));
+  assert.equal(f.queued().length, 3);
+  const boundedToken = notificationToken(f.queued()[2]![4]!);
+  await assert.rejects(tool(codex, 'bridge_messages_read', { notificationToken: boundedToken, cursor: '' }, CODEX_ID), /bounded batch/);
+  await assert.rejects(tool(codex, 'bridge_messages_read', { notificationToken: boundedToken, messageId: bounded[0]!.messageId }, CODEX_ID), /bounded batch/);
+  const page = await tool<NotificationReceived>(codex, 'bridge_messages_read', { notificationToken: boundedToken, limit: 1 }, CODEX_ID);
+  assert.equal(page.messages.length, 1);
+  assert.deepEqual(page.notification, { consumed: true, replayed: false, remaining: true });
+  assert.equal(page.nextCursor, null, 'A delivered token consumes one bounded page, not an unbounded cursor loop.');
+  assert.equal(f.queued().length, 4, 'The unread remainder gets one successor wakeup.');
+  const boundedReplay = await tool<NotificationReceived>(codex, 'bridge_messages_read', { notificationToken: boundedToken, limit: 1 }, CODEX_ID);
+  assert.deepEqual(boundedReplay.messages.map(message => message.messageId), page.messages.map(message => message.messageId));
+  assert.ok(boundedReplay.messages.every(message => message.previouslyRead && !message.actionable));
+  assert.equal(f.queued().length, 4);
+  const lastPage = await tool<NotificationReceived>(codex, 'bridge_messages_read', { notificationToken: notificationToken(f.queued()[3]![4]!) }, CODEX_ID);
+  assert.deepEqual(new Set([...page.messages, ...lastPage.messages].map(message => message.messageId)), new Set(bounded.map(message => message.messageId)));
+  assert.deepEqual(lastPage.notification, { consumed: true, replayed: false, remaining: false });
+  assert.equal(f.queued().length, 4);
 });
