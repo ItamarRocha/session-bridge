@@ -1,4 +1,4 @@
-export type Host = 'codex' | 'claude';
+export type Host = 'codex' | 'claude' | 'devin';
 export type MessageKind = 'request' | 'reply' | 'notice';
 export type DeliveryState = 'stored' | 'dispatching' | 'submitted' | 'unknown';
 
@@ -94,6 +94,7 @@ export interface NotificationRead {
 export interface StoreContract {
   readonly home: string;
   createPeer(input: {host: Host; label: string; nativeSessionId?: string; endpoint?: string}): {peer: Peer; ticket: string};
+  ensureNativePeer(input: {host: 'codex' | 'devin'; nativeSessionId: string; label?: string; attach?: boolean}): Peer;
   ensureCodexPeer(input: {nativeSessionId: string; label?: string; attach?: boolean}): Peer;
   findNativePeer(nativeSessionId: string, host?: Host): Peer | null;
   sameSession(a: string, b: string): boolean;

@@ -7,6 +7,7 @@ export class Bridge {
   constructor(readonly store: StoreContract, readonly host: Host, private readonly codexCommand?: string) {}
 
   attach(input: { ticket?: string; sessionId?: string; label?: string }): Peer {
+    if (this.host === 'devin') throw new Error('Devin uses bridge_connect with fresh native hook context; legacy attachment is unavailable.');
     if (this.selfId) throw new Error('Already attached. Detach before binding another session.');
     let peer: Peer;
     if (this.host === 'claude') {

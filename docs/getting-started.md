@@ -2,17 +2,16 @@
 
 [Overview](../README.md) · [Method reference](methods.md) · [Troubleshooting](support.md)
 
-Session Bridge connects existing conversations. Install the helpers once, activate Claude's receiver when you want to connect, and use native session IDs to address peers.
+Session Bridge connects existing conversations. Install the helpers once, connect the selected conversations explicitly, and use their native session IDs to address peers.
 
 ## Requirements
 
 - macOS, with all participants running under the same OS account.
 - Node.js 24+ and npm, available in each client's helper environment.
-- A Codex client exposing `codex queue --thread … --message …`.
-- Interactive Claude Code with the native `Monitor` tool available.
-- The same local bridge data directory for both sides.
+- The supported interface for each participating client: Codex exposing `codex queue --thread … --message …`, interactive Claude Code with native `Monitor`, or Devin CLI with plugin hooks and MCP.
+- The same local bridge data directory for all participants.
 
-The development baseline is Codex CLI **0.153.1** and Claude Code **2.1.261**. A version number alone does not prove that the running host exposes the required capability. Run `doctor` from the environment that launches the helpers and inspect the actual client tools. See [validation](validation.md) for observed behavior and [Claude support](support.md#claude-code) for host restrictions.
+The development baseline is Codex CLI **0.153.1**, Claude Code **2.1.261** and Devin CLI **3000.10.21**. Devin native acceptance is pending. A version number alone does not prove that the running host exposes the required capability. Run `doctor` from the environment that launches the helpers and inspect the actual client tools. See [validation](validation.md) for observed behavior and [Claude support](support.md#claude-code) for host restrictions.
 
 ## Build from source
 
@@ -24,7 +23,7 @@ npm run build
 node dist/cli.js doctor
 ```
 
-Keep this checkout in a permanent location. `dist/` and `node_modules/` are generated locally and are required at runtime. A source archive or plugin manifest alone is insufficient. Rebuild after updating source; use [the upgrade procedure](support.md#upgrading-to-v040) when an older helper or ledger is involved.
+Keep this checkout in a permanent location. `dist/` and `node_modules/` are generated locally and are required at runtime. A source archive or plugin manifest alone is insufficient. Rebuild after updating source; use [the upgrade procedure](support.md#upgrading-to-v050) when an older helper or ledger is involved.
 
 `doctor` checks runtime versions, native queue help, and the selected Codex profile. It does not send a message or establish model receipt.
 
@@ -66,6 +65,27 @@ claude --resume YOUR_CLAUDE_SESSION_UUID \
 
 This is a client launch/resume option, not attachment to an already running process. Choose either this route or the personal directory installation. The bridge itself does not launch a Claude model session. [Claude CLI reference](https://code.claude.com/docs/en/cli-reference)
 
+## Load the plugin in Devin CLI
+
+From the built checkout, install on this machine only:
+
+```bash
+devin plugins install --local "$PWD"
+devin plugins info session-bridge
+```
+
+Devin requires an existing signed-in CLI account to manage plugins. Use a permanent checkout. Devin links local plugins directly, and edits apply on the next session. Follow the client's reload/resume flow to retain the intended native conversation. `--local` keeps the installation out of the personal cloud plugin manifest. [Devin plugin installation](https://docs.devin.ai/cli/extensibility/plugins/overview#installing-a-plugin)
+
+In the intended Devin conversation, confirm `/session-bridge:connect`, `/session-bridge:sessions` and the six MCP methods are available. Inspect `/hooks` for the plugin's `PreToolUse`, `PostToolUse` and `UserPromptSubmit` hooks. Loading them leaves the bridge inactive.
+
+```text
+/session-bridge:connect codex:YOUR_CODEX_TASK_UUID
+```
+
+A selected peer is required: the connect method activates Devin and saves that connection together. Invoking the command without a peer explains what ID to supply. Share the returned native Devin ID with other peers, preserving its case and word-pair spelling; use `devin:ID` as its public address. Another Devin destination must have connected explicitly before it can be addressed.
+
+Devin receives a coalesced inbox notice after tool completion or at the next user prompt. Its hooked MCP read records receipt. An already-idle Devin conversation waits for that next boundary or an explicit read; no Monitor or keepalive loop is started. Session lists report `receiver.transport: "hooks"`, `receiver.state: "unknown"` and `receiver.idleWakeAvailable: false`. See [Devin support](support.md#devin-cli) for identity and recovery.
+
 ## Connect from Claude to Codex
 
 1. Ask the existing Codex task for its own native ID, available as `CODEX_THREAD_ID` in that task's shell. A separate ordinary terminal is not the source of that task's identity.
@@ -96,7 +116,7 @@ A never-registered Claude target needs its initial activation. A registered targ
 
 ## List, update, or disconnect
 
-In Claude, `/session-bridge:sessions` shows connected peers, receiver availability, unread counts, notification state and their latest reported work. It leaves an inactive receiver inactive.
+In Claude or Devin, `/session-bridge:sessions` shows connected peers, receiver availability, unread counts, notification state and their latest reported work. It leaves an inactive receiver inactive.
 
 From a connected Codex task's shell:
 
@@ -106,12 +126,12 @@ node /absolute/path/session-bridge/dist/cli.js status-update --host codex --text
 node /absolute/path/session-bridge/dist/cli.js messages-read --host codex --notification-token DELIVERED_TOKEN
 node /absolute/path/session-bridge/dist/cli.js messages-read --host codex --unread-only
 node /absolute/path/session-bridge/dist/cli.js messages-read --host codex --message MESSAGE_ID
-node /absolute/path/session-bridge/dist/cli.js disconnect --host codex --target PEER_NATIVE_UUID
+node /absolute/path/session-bridge/dist/cli.js disconnect --host codex --target PEER_NATIVE_ID
 ```
 
 Status exposes inbox counts and notification state without its opaque token. `DELIVERED_TOKEN` comes from the native notice. The default read remains incoming history. Use `bridge_messages_read({unreadOnly: true})` for manual unread inspection. When handling a delivered notification, pass its `notificationToken` exactly as provided; ordinary polling does not consume the pending wakeup. A token implies an unread page, default 20 and maximum 100; omit `messageId`/`cursor` or CLI `--message`/`--cursor`. Its result includes `notification: {consumed, replayed, remaining}`, `inbox`, and `nextCursor: null`. Replayed messages are non-actionable; inspect prior work and use history or `messageId` to recover unfinished requests.
 
-Native IDs may be provider-prefixed. Use `codex:UUID` for an unregistered Codex destination; unknown bare UUIDs cannot identify their provider. Disconnecting one peer keeps other connections and both native sessions intact.
+Native IDs may be provider-prefixed with `codex:`, `claude:` or `devin:`. Preserve Devin IDs exactly. Use `codex:UUID` for an unregistered Codex destination; unknown bare IDs cannot identify their provider. Disconnecting one peer keeps other connections and both native sessions intact.
 
 ## Configuration
 

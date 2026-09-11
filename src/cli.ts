@@ -1,28 +1,30 @@
 #!/usr/bin/env node
 import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
-import { readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { Store } from './store.js';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { Store, StoreSchemaVersionError } from './store.js';
 import { Bridge } from './bridge.js';
 import { Sessions } from './sessions.js';
-import { claudeContextHook } from './context-hook.js';
+import { claudeContextHook, devinContextHook } from './context-hook.js';
+import { runDevinInboxHook } from './inbox-hook.js';
+import { canonicalSessionId, isHost } from './providers.js';
 import { defaultHome } from './paths.js';
 import { doctor } from './doctor.js';
 import { startMonitor } from './monitor.js';
 import { startMcp } from './mcp.js';
 import type { Host } from './types.js';
 
-const usage = `Session Bridge — connect existing local Codex and Claude Code sessions
+const usage = `Session Bridge — connect existing local Codex, Claude Code and Devin sessions
 
 session-bridge doctor
-session-bridge connect --host codex|claude --target [codex:|claude:]UUID
-session-bridge sessions --host codex|claude [--limit N] [--cursor CURSOR]
-session-bridge status-update --host codex|claude --text TEXT
-session-bridge message-send --host codex|claude --target UUID --key KEY --body-file PATH [--reply-to MESSAGE | --notice]
-session-bridge messages-read --host codex|claude [--message MESSAGE | --notification-token TOKEN | --unread-only] [--limit N] [--cursor CURSOR]
-session-bridge disconnect --host codex|claude --target UUID
+session-bridge connect --host codex|claude|devin --target [codex:|claude:|devin:]SESSION_ID
+session-bridge sessions --host codex|claude|devin [--limit N] [--cursor CURSOR]
+session-bridge status-update --host codex|claude|devin --text TEXT
+session-bridge message-send --host codex|claude|devin --target SESSION_ID --key KEY --body-file PATH [--reply-to MESSAGE | --notice]
+session-bridge messages-read --host codex|claude|devin [--message MESSAGE | --notification-token TOKEN | --unread-only] [--limit N] [--cursor CURSOR]
+session-bridge disconnect --host codex|claude|devin --target SESSION_ID
 
-Codex commands use the current shell's CODEX_THREAD_ID. Claude commands require a fresh
+Codex commands use the current shell's CODEX_THREAD_ID. Claude and Devin commands require a fresh
 --session-id supplied by the current skill/hook, never the MCP startup environment.
 MCP has six tools by default. --legacy-tools opts into the 0.1 catalog for migration.
 The following legacy/operator commands remain available:
@@ -36,14 +38,17 @@ session-bridge status --self PEER [--message MESSAGE]
 session-bridge cancel --self PEER --message MESSAGE
 session-bridge disconnect --self PEER --pairing PAIRING
 session-bridge stop --self PEER
-session-bridge mcp --host codex|claude
+session-bridge mcp --host codex|claude|devin
 session-bridge monitor [--session-id UUID] [--label TEXT]
+session-bridge context-hook [--host claude|devin]
+session-bridge inbox-hook --host devin
 
 Options: --home PATH (or SESSION_BRIDGE_HOME), --codex-command PATH.
 For send/reply, --body-file PATH safely reads UTF-8 instead of --body.
 Send also accepts --kind request|notice and --ttl-seconds 1..86400.
 All regular commands emit JSON. MCP stdout is protocol-only; monitor stdout is notices-only.
 No command starts, resumes, or duplicates a model session.
+Devin receives at PostToolUse/UserPromptSubmit hooks; it cannot be woken while idle.
 `;
 
 async function main() {
@@ -75,7 +80,7 @@ async function main() {
   };
   const host = (): Host => {
     const value = required('host');
-    if (value !== 'codex' && value !== 'claude') throw new Error('--host must be codex or claude.');
+    if (!isHost(value)) throw new Error('--host must be codex, claude or devin.');
     return value;
   };
   const body = () => {
@@ -87,15 +92,43 @@ async function main() {
     if (!stat.isFile() || stat.size > 32_768) throw new Error('Body file must be a regular UTF-8 file no larger than 32 KiB.');
     return readFileSync(file, 'utf8');
   };
-  if (command === 'context-hook') {
+  if (command === 'context-hook' || command === 'inbox-hook') {
     let input = '';
     process.stdin.setEncoding('utf8');
     for await (const chunk of process.stdin) {
       input += String(chunk);
       if (Buffer.byteLength(input) > 262144) throw new Error('Hook input exceeds 256 KiB.');
     }
-    const output = claudeContextHook(JSON.parse(input));
-    if (output) process.stdout.write(`${JSON.stringify(output)}\n`);
+    const payload: unknown = JSON.parse(input);
+    if (command === 'context-hook') {
+      const provider = option('host') ?? 'claude';
+      if (provider !== 'claude' && provider !== 'devin') throw new Error('Context hooks support Claude and Devin only.');
+      const output = provider === 'devin' ? devinContextHook(payload) : claudeContextHook(payload);
+      if (output) process.stdout.write(`${JSON.stringify(output)}\n`);
+      return;
+    }
+    if (host() !== 'devin') throw new Error('Inbox hooks support Devin only.');
+    const hookHome = resolve(option('home') ?? defaultHome());
+    if (!existsSync(join(hookHome, 'bridge.sqlite'))) return;
+    let store: Store;
+    try { store = new Store(hookHome, Date.now, {migrate: false}); }
+    catch (error) { if (error instanceof StoreSchemaVersionError) return; throw error; }
+    // Retain the stream error listener until exit: a late EPIPE must not escape the hook result.
+    process.stdout.on('error', () => { process.exitCode = 1; });
+    try {
+      await runDevinInboxHook(payload, store, output => new Promise<void>((resolve, reject) => {
+        const deadline = setTimeout(() => { process.stdout.destroy(); reject(new Error('Hook output timed out.')); }, 2000);
+        process.stdout.write(`${JSON.stringify(output)}\n`, error => {
+          clearTimeout(deadline);
+          if (error) reject(error); else resolve();
+        });
+      }));
+    } finally {
+      store.close();
+      // Node can retain a stalled pipe write even after stdout.destroy().
+      const exitDeadline = setTimeout(() => { process.exit(process.exitCode ?? 0); }, 250);
+      exitDeadline.unref();
+    }
     return;
   }
   const home = resolve(option('home') ?? defaultHome());
@@ -103,6 +136,7 @@ async function main() {
   const print = (value: unknown) => process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 
   if (command === 'doctor') { print(await doctor(home, codexCommand)); return; }
+  if (option('host') === 'devin' && values['legacy-tools']) throw new Error('Devin supports the six native session methods only.');
   if (command === 'monitor') {
     let monitor: Awaited<ReturnType<typeof startMonitor>> | undefined;
     let outputError: Error | undefined;
@@ -130,15 +164,22 @@ async function main() {
     }
     return;
   }
-  const store = new Store(home);
+  let currentStore: Store | undefined;
+  const openStore = (activate: boolean) => {
+    if (currentStore) return currentStore;
+    if (!activate && !existsSync(join(home, 'bridge.sqlite'))) return null;
+    try { return currentStore = new Store(home, Date.now, {migrate: activate}); }
+    catch (error) { if (!activate && error instanceof StoreSchemaVersionError) return null; throw error; }
+  };
   if (command === 'mcp') {
-    const instance = await startMcp(store, host(), codexCommand, {legacy: Boolean(values['legacy-tools'])});
+    const provider = host();
+    const instance = await startMcp(provider === 'devin' ? openStore : openStore(true)!, provider, codexCommand, {legacy: Boolean(values['legacy-tools'])});
     let closed = false;
     const cleanup = () => {
       if (closed) return;
       closed = true;
-      try { instance.bridge.detach(); } catch { /* Unattached connections own no peer. */ }
-      store.close();
+      try { instance.detach(); } catch { /* Unattached connections own no peer. */ }
+      currentStore?.close();
     };
     instance.server.server.onclose = cleanup;
     const stop = () => { cleanup(); void instance.server.close(); };
@@ -147,8 +188,22 @@ async function main() {
     process.once('exit', cleanup);
     return;
   }
+  const nativeCommand = ['connect', 'sessions', 'status-update', 'message-send', 'messages-read'].includes(command)
+    || (command === 'disconnect' && option('target') !== undefined);
+  const devinCommand = nativeCommand && option('host') === 'devin';
+  if (devinCommand) {
+    const nativeId = option('session-id');
+    if (!nativeId) throw new Error('Fresh native session context is unavailable. Supply this invocation’s native session ID.');
+    canonicalSessionId('devin', nativeId);
+  }
+  const store = openStore(!devinCommand || command === 'connect');
+  if (!store) {
+    if (command !== 'sessions') throw new Error('Activation required: connect this session before using its inbox.');
+    print({self: null, activationRequired: true, sessions: [], nextCursor: null});
+    return;
+  }
   try {
-    if (['connect', 'sessions', 'status-update', 'message-send', 'messages-read'].includes(command) || (command === 'disconnect' && option('target'))) {
+    if (nativeCommand) {
       const provider = host();
       const nativeId = provider === 'codex' ? process.env.CODEX_THREAD_ID ?? option('session-id') : option('session-id');
       const sessions = new Sessions(store, provider, nativeId, codexCommand);

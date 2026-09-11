@@ -1,9 +1,9 @@
 {
   "name": "@itamarrocha/session-bridge",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
-  "description": "Connect running Codex and Claude Code sessions through supported local interfaces.",
+  "description": "Connect running Codex, Claude Code and Devin CLI sessions through supported local interfaces.",
   "license": "MIT",
   "engines": {
     "node": ">=24.0.0"

@@ -16,8 +16,9 @@ async function inspect(command: string, args: string[], env: NodeJS.ProcessEnv) 
 
 export async function doctor(home: string, codexCommand = 'codex', env: NodeJS.ProcessEnv = process.env) {
   const destination = codexEnvironment(env);
-  const [codex, queue, claude] = await Promise.all([
-    inspect(codexCommand, ['--version'], destination.env), inspect(codexCommand, ['queue', '--help'], destination.env), inspect('claude', ['--version'], env),
+  const [codex, queue, claude, devin] = await Promise.all([
+    inspect(codexCommand, ['--version'], destination.env), inspect(codexCommand, ['queue', '--help'], destination.env),
+    inspect('claude', ['--version'], env), inspect('devin', ['--version'], env),
   ]);
   return {
     node: { version: process.version, supported: Number(process.versions.node.split('.')[0]) >= 24 },
@@ -25,9 +26,11 @@ export async function doctor(home: string, codexCommand = 'codex', env: NodeJS.P
     stateHome: home,
     codex: { ...codex, queueAvailable: queue.available && /--thread/.test(queue.output) && /--message/.test(queue.output), routing: destination.routing },
     claude,
+    devin: {...devin, transport: 'hooks', idleWakeAvailable: false},
     monitorEnvironmentBlocked: ['DISABLE_TELEMETRY', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'].filter(key => Boolean(env[key])),
     limitations: [
       'Claude plugin monitors are experimental and require a supported interactive CLI host. Version alone does not prove availability.',
+      'Devin native host support is unverified. Version detection does not prove hook loading or model reception, and lifecycle hooks cannot wake an already-idle session.',
       'Codex native queue availability does not prove the target is loaded in the same storage root. Closed tasks remain queued; interruption remains a pause.',
       'Codex routing reports the child environment, not a verified queue path. Native config sqlite_home overrides CODEX_SQLITE_HOME, which overrides the Codex home for SQLite storage.',
       'This diagnostic reads versions/help only. It does not send a message or test model reception.',

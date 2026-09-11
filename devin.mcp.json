@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "session-bridge": {
+      "command": "node",
+      "args": [
+        "${PLUGIN_ROOT}/dist/cli.js",
+        "mcp",
+        "--host",
+        "devin"
+      ]
+    }
+  }
+}

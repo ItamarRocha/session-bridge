@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import test, { type TestContext } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { claudeContextHook } from '../src/context-hook.js';
+import { claudeContextHook, devinContextHook } from '../src/context-hook.js';
 import type { Sessions } from '../src/sessions.js';
 import { Store } from '../src/store.js';
 import type { Host } from '../src/types.js';
@@ -83,6 +84,7 @@ function fixture(t: TestContext) {
   const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
   delete env.CODEX_THREAD_ID;
   delete env.CLAUDE_SESSION_ID;
+  delete env.DEVIN_SESSION_ID;
   t.after(async () => {
     try { for (const cleanup of cleanups.reverse()) await cleanup(); }
     finally { rmSync(home, { recursive: true, force: true }); }
@@ -90,7 +92,7 @@ function fixture(t: TestContext) {
   const client = async (host: Host, staleStartup = false) => {
     const transport = new StdioClientTransport({
       command: process.execPath, args: [entry, 'mcp', '--host', host, '--home', home, '--codex-command', command],
-      env: staleStartup ? { ...env, CODEX_THREAD_ID: STALE_ID, CLAUDE_SESSION_ID: STALE_ID } : env,
+      env: staleStartup ? { ...env, CODEX_THREAD_ID: STALE_ID, CLAUDE_SESSION_ID: STALE_ID, DEVIN_SESSION_ID: 'Old-Session' } : env,
       stderr: 'pipe', cwd: process.cwd(),
     });
     const connection = new Client({ name: `six-method-${host}`, version: '1.0.0' });
@@ -157,6 +159,47 @@ test('default stdio MCP exposes six methods and refuses missing current-session 
   const store = new Store(f.home);
   try { assert.deepEqual(store.peers(), []); } finally { store.close(); }
   assert.deepEqual(f.queued(), []);
+});
+
+test('Devin MCP startup and passive reads leave the shared ledger absent or unchanged until explicit connection', {timeout: 15000}, async t => {
+  const absent = fixture(t);
+  const cold = await absent.client('devin');
+  assert.deepEqual((await cold.listTools()).tools.map(method => method.name).sort(), publicMethods);
+  assert.equal(existsSync(join(absent.home, 'bridge.sqlite')), false);
+  const inactive = await tool<Listed>(cold, 'bridge_sessions_list', {_sessionId: 'Quiet-Devin'});
+  assert.equal(inactive.activationRequired, true);
+  assert.equal(existsSync(join(absent.home, 'bridge.sqlite')), false);
+  await assert.rejects(tool(cold, 'bridge_connect', {sessionId: `codex:${CODEX_ID}`}), /native session context/);
+  assert.equal(existsSync(join(absent.home, 'bridge.sqlite')), false);
+
+  for (const version of [4, 6]) {
+    const f = fixture(t);
+    const existing = new Store(f.home);
+    existing.ensureCodexPeer({nativeSessionId: CODEX_ID});
+    existing.close();
+    const file = join(f.home, 'bridge.sqlite');
+    const database = new DatabaseSync(file);
+    database.exec(`PRAGMA journal_mode=DELETE; PRAGMA user_version=${version}`);
+    database.close();
+    const before = readFileSync(file);
+    const devin = await f.client('devin');
+    await devin.listTools();
+    assert.deepEqual(readFileSync(file), before);
+    assert.equal((await tool<Listed>(devin, 'bridge_sessions_list', {_sessionId: 'Quiet-Devin'})).activationRequired, true);
+    await assert.rejects(tool(devin, 'bridge_messages_read', {_sessionId: 'Quiet-Devin'}), /Activation required/);
+    await assert.rejects(tool(devin, 'bridge_connect', {_sessionId: 'invalid/id', sessionId: `codex:${CODEX_ID}`}), /native session ID/);
+    assert.deepEqual(readFileSync(file), before);
+    if (version === 4) {
+      const connected = await tool<Connected>(devin, 'bridge_connect', {_sessionId: 'Quiet-Devin', sessionId: `codex:${CODEX_ID}`});
+      assert.equal(connected.self!.sessionId, 'Quiet-Devin');
+      const upgraded = new Store(f.home);
+      try { assert.equal(upgraded.findNativePeer('Quiet-Devin', 'devin')!.attachedAt !== null, true); }
+      finally { upgraded.close(); }
+    } else {
+      await assert.rejects(tool(devin, 'bridge_connect', {_sessionId: 'Quiet-Devin', sessionId: `codex:${CODEX_ID}`}), /Unsupported store schema version: 6/);
+      assert.deepEqual(readFileSync(file), before);
+    }
+  }
 });
 
 test('two real MCP clients and native-ID monitor exchange requests using fresh per-call identity and simulated Claude hooks', { timeout: 20_000 }, async t => {
@@ -424,4 +467,84 @@ test('twenty distinct sends and proactive reads share one outstanding Codex noti
   assert.deepEqual(new Set([...page.messages, ...lastPage.messages].map(message => message.messageId)), new Set(bounded.map(message => message.messageId)));
   assert.deepEqual(lastPage.notification, { consumed: true, replayed: false, remaining: false });
   assert.equal(f.queued().length, 4);
+});
+
+
+test('Devin stdio MCP binds case-preserved word-pair identities only through explicit connect and fresh hook input', {timeout: 15_000}, async t => {
+  const f = fixture(t);
+  const devin = await f.client('devin', true);
+  const codex = await f.client('codex', true);
+  const ownId = 'Gentle-Falcon';
+  const nextId = 'gentle-falcon';
+  const devinInput = (name: string, args: Record<string, unknown> = {}, identity: unknown = ownId) => {
+    const output = devinContextHook({hook_event_name: 'PreToolUse', session_id: identity,
+      tool_name: `mcp__session-bridge__${name}`, tool_input: {...args, _sessionId: 'Old-Session'}});
+    assert.ok(output);
+    return output.hookSpecificOutput.updatedInput;
+  };
+  const devinTool = <T>(name: string, args: Record<string, unknown> = {}, identity: unknown = ownId) =>
+    tool<T>(devin, name, devinInput(name, args, identity));
+  assert.equal(devin.getServerVersion()!.version, '0.5.0');
+  const catalog = (await devin.listTools()).tools;
+  assert.deepEqual(catalog.map(method => method.name).sort(), publicMethods);
+  assert.ok(catalog.every(method => method.inputSchema.properties?._sessionId));
+  await assert.rejects(tool(devin, 'bridge_sessions_list'), /native session context is unavailable/);
+  await assert.rejects(tool(devin, 'bridge_sessions_list', {}, CODEX_ID), /native session context is unavailable/);
+  const dormant = await devinTool<Listed>('bridge_sessions_list');
+  assert.equal(dormant.activationRequired, true);
+  assert.equal(dormant.self, null);
+  assert.deepEqual(dormant.sessions, []);
+  let store = new Store(f.home);
+  try { assert.deepEqual(store.peers(), []); } finally { store.close(); }
+  const connected = await devinTool<Connected>('bridge_connect', {sessionId: `codex:${CODEX_ID}`});
+  assert.equal(connected.state, 'pending');
+  const own = await devinTool<Listed>('bridge_sessions_list');
+  assert.equal(own.self!.sessionId, ownId);
+  assert.equal(own.self!.address, `devin:${ownId}`);
+  assert.equal(own.self!.provider, 'devin');
+  assert.equal(own.self!.receiver.transport, 'hooks');
+  assert.equal(own.self!.receiver.state, 'unknown');
+  assert.equal(own.self!.receiver.idleWakeAvailable, false);
+  const fullLengthTarget = await devinTool<Connected>('bridge_connect', {sessionId: `devin:${'x'.repeat(128)}`});
+  assert.equal(fullLengthTarget.state, 'activation_required', 'A valid prefixed native address fits the tool schema without activating its target.');
+  assert.deepEqual(f.queued(), []);
+  const request = await devinTool<Sent>('bridge_message_send', {
+    sessionId: CODEX_ID, text: 'Review this selected snapshot.', idempotencyKey: 'devin-review',
+  });
+  assert.equal(request.from.sessionId, ownId);
+  const codexToken = notificationToken(f.queued()[0]![4]!);
+  await tool(codex, 'bridge_messages_read', {notificationToken: codexToken}, CODEX_ID);
+  const answer = await tool<Sent>(codex, 'bridge_message_send', {
+    sessionId: `devin:${ownId}`, replyTo: request.messageId, text: 'Review complete: one finding.', idempotencyKey: 'codex-result',
+  }, CODEX_ID);
+  assert.equal(answer.delivery, 'stored');
+  assert.equal(answer.to.sessionId, ownId);
+  assert.equal(f.queued().length, 1, 'A Devin message is stored without a hidden model wakeup.');
+  const changed = await devinTool<Listed>('bridge_sessions_list', {}, nextId);
+  assert.equal(changed.activationRequired, true);
+  assert.deepEqual(changed.sessions, []);
+  await assert.rejects(devinTool('bridge_messages_read', {messageId: answer.messageId}, nextId), /Activation required/);
+  await devinTool('bridge_connect', {sessionId: CODEX_ID}, nextId);
+  const next = await devinTool<Listed>('bridge_sessions_list', {}, nextId);
+  assert.equal(next.self!.sessionId, nextId);
+  assert.notEqual(next.self!.sessionId, own.self!.sessionId);
+  await assert.rejects(devinTool('bridge_messages_read', {messageId: answer.messageId}, nextId), /Not a participant/);
+  for (const invalid of [null, '', 'bad\nidentity']) {
+    const args = devinInput('bridge_messages_read', {messageId: answer.messageId}, invalid);
+    assert.equal(args._sessionId, null);
+    await assert.rejects(tool(devin, 'bridge_messages_read', args), /_sessionId|invalid|native session context/i);
+  }
+  const receipt = await devinTool<Received>('bridge_messages_read', {messageId: answer.messageId});
+  assert.equal(receipt.messages[0]!.to.sessionId, ownId);
+  assert.equal(receipt.messages[0]!.previouslyRead, false);
+  const updated = await devinTool<ReturnType<Sessions['updateStatus']>>('bridge_status_update', {text: 'Inspecting the review finding.'});
+  assert.equal(updated.sessionId, ownId);
+  assert.equal((await devinTool<Listed>('bridge_sessions_list', {}, nextId)).self!.status, null);
+  assert.equal(f.queued().length, 1);
+  store = new Store(f.home);
+  try {
+    assert.equal(store.findNativePeer('Old-Session', 'devin'), null);
+    assert.notEqual(store.findNativePeer(ownId, 'devin')!.id, store.findNativePeer(nextId, 'devin')!.id);
+  } finally { store.close(); }
+  assertPublic([request, answer, receipt, updated]);
 });

@@ -6,6 +6,7 @@ import test, { type TestContext } from 'node:test';
 import { Sessions } from '../src/sessions.js';
 import { Store } from '../src/store.js';
 import type { Host } from '../src/types.js';
+import { runDevinInboxHook } from '../src/inbox-hook.js';
 
 const CODEX_A = '11111111-1111-4111-8111-111111111111';
 const CODEX_B = '22222222-2222-4222-8222-222222222222';
@@ -117,6 +118,47 @@ test('listing and self status remain silent, attributed and stale without activa
   assert.deepEqual(f.codexA.read().messages, []);
   assert.deepEqual(f.claudeA.read().messages, []);
   assert.deepEqual(f.queued(), []);
+});
+
+test('Devin joins several providers through explicit connection while incoming delivery waits for its own hook', async t => {
+  const f = fixture(t);
+  const devin = f.session('devin', 'Amber-Fox');
+  const otherDevin = f.session('devin', 'Quiet-Owl');
+  const count = f.store.peers().length;
+  assert.equal(devin.list().activationRequired, true);
+  assert.throws(() => devin.read(), /Activation required/);
+  assert.equal((await f.codexA.connect('devin:Amber-Fox')).state, 'activation_required');
+  assert.equal(f.store.peers().length, count, 'Inviting Devin cannot activate its session.');
+  assert.equal((await devin.connect(`codex:${CODEX_A}`)).state, 'connected');
+  await devin.connect(`claude:${CLAUDE_A}`);
+  await otherDevin.connect('devin:Amber-Fox');
+  assert.deepEqual(new Set(devin.list().sessions.map(peer => peer.provider)), new Set(['codex', 'claude', 'devin']));
+  const receiver = f.codexA.list().sessions.find(peer => peer.provider === 'devin')!.receiver;
+  assert.equal(receiver.transport, 'hooks');
+  assert.equal(receiver.idleWakeAvailable, false);
+  assert.equal(receiver.state, 'unknown');
+  const queued = f.queued().length;
+  const incoming = await f.codexA.send({sessionId: 'devin:Amber-Fox', text: 'Review while I continue.', idempotencyKey: 'devin-review'});
+  assert.equal(incoming.deliveryStage, 'queued');
+  assert.equal(incoming.recipientInbox.notification?.state, 'pending');
+  assert.equal(f.queued().length, queued, 'Devin ingress does not invoke the Codex queue or a replacement model.');
+  let token = '';
+  await runDevinInboxHook({hook_event_name: 'PostToolUse', session_id: 'Amber-Fox'}, f.store, async output => {
+    token = /"notificationToken":"([^"]+)"/.exec(output.hookSpecificOutput.additionalContext)![1]!;
+  });
+  const read = await devin.readNotification(token);
+  assert.equal(read.messages[0]!.messageId, incoming.messageId);
+  assert.equal(read.messages[0]!.actionable, true);
+  const reply = await devin.send({sessionId: `codex:${CODEX_A}`, replyTo: incoming.messageId, text: 'Review complete.', idempotencyKey: 'devin-result'});
+  assert.equal(f.queued().length, queued + 1);
+  assert.equal(f.codexA.read({messageId: reply.messageId}).messages[0]!.text, 'Review complete.');
+  const claudeRequest = await devin.send({sessionId: `claude:${CLAUDE_A}`, text: 'Review the next change.', idempotencyKey: 'claude-review'});
+  assert.equal(f.claudeA.read({messageId: claudeRequest.messageId}).messages[0]!.actionable, true);
+  const localRequest = await otherDevin.send({sessionId: 'Amber-Fox', text: 'Share the result.', idempotencyKey: 'local-review'});
+  assert.equal(devin.read({messageId: localRequest.messageId}).messages[0]!.from.sessionId, 'Quiet-Owl');
+  assert.equal(devin.disconnect('Quiet-Owl').disconnected, true);
+  assert.equal(devin.list().sessions.length, 2);
+  assert.equal(otherDevin.list().sessions.length, 0);
 });
 
 test('receiver health and message progress stay distinct from durable connections', async t => {

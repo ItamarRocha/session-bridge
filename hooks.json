@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__session-bridge__bridge_(connect|sessions_list|status_update|message_send|messages_read|disconnect)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${DEVIN_PLUGIN_ROOT}/dist/cli.js\" context-hook --host devin",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${DEVIN_PLUGIN_ROOT}/dist/cli.js\" inbox-hook --host devin",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${DEVIN_PLUGIN_ROOT}/dist/cli.js\" inbox-hook --host devin",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
