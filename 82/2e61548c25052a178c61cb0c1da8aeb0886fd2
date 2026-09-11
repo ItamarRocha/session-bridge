@@ -1,0 +1,104 @@
+src/bridge.ts
+  s_e715395fcc9d04::t_202e788e634a04 10
+test/sessions.test.ts
+  s_e715395fcc9d04::t_0bd5902749d023 9,123-161
+  s_e715395fcc9d04::t_d257d5a5f0eea9 162-163
+src/types.ts
+  s_e715395fcc9d04::t_becfad0153eae8 1,97
+src/sessions.ts
+  s_e715395fcc9d04::t_202e788e634a04 2,8-11,41,46,54,76,98-99,110-111
+src/transport.ts
+  s_e715395fcc9d04::t_202e788e634a04 6,37-38,49,52,58
+test/mcp-sessions.test.ts
+  s_e715395fcc9d04::t_1b7c7ff00fd25e 5,11,87,95,164-204,471-550
+docs/devin-cli-research.md
+  s_e715395fcc9d04::t_ea2404ada49d93 1-19,21-29,31-46,48-49
+  s_e715395fcc9d04::t_83568be887e37c 20,30,47
+src/cli.ts
+  s_e715395fcc9d04::t_db740e39e02bf3 3-4,8-9,17,20-25,27,41,43-44,51,83,95,102-112,116-125,139
+  s_e715395fcc9d04::t_e0dffb244d037d 128-130
+  s_e715395fcc9d04::t_27eebe2c34ce9f 10,167-173,182,191-204,206
+  s_e715395fcc9d04::t_d4c97d2471ab52 5,113-115,126-127,131,175-176,181
+src/mcp.ts
+  s_e715395fcc9d04::t_d4c97d2471ab52 6,11,64,68,70-77,79-80,82,84,86-92,99-101,105,112,123,125,128
+test/store.test.ts
+  s_e715395fcc9d04::t_5364a60fa14d52 104,249
+src/doctor.ts
+  s_e715395fcc9d04::t_054581dbb77e39 19-21,29,33
+src/store.ts
+  s_e715395fcc9d04::t_7be29537b82967 269,276,282-283,301,303-304,309,312,319,327-333,335,337,345,354,360,362-366,373,375-376,388,390-391
+  s_e715395fcc9d04::t_5364a60fa14d52 421,476,501
+  s_e715395fcc9d04::t_2079eeaa99791a 125,130-131,196-215,219,225
+  s_e715395fcc9d04::t_becfad0153eae8 7,13
+  s_e715395fcc9d04::t_d4c97d2471ab52 17-22,119,126-128,134-136
+  s_e715395fcc9d04::t_16e342694c9f74 16
+test/store-devin.test.ts
+  s_e715395fcc9d04::t_f57f925e974864 52-72,315,349-365,368-396
+  s_e715395fcc9d04::t_944428795ad449 1-51,73-314,316-348,397
+  s_e715395fcc9d04::t_804d6be73d8f64 366-367
+docs/methods.md
+  s_e715395fcc9d04::t_eddb9025f5b3a7 12,18,22-24,30-38,61-62,85
+test/inbox-hook.test.ts
+  s_e715395fcc9d04::t_27eebe2c34ce9f 155-159
+  s_e715395fcc9d04::t_1b7c7ff00fd25e 1-154,160-244
+src/inbox-hook.ts
+  s_e715395fcc9d04::t_202e788e634a04 1-34
+test/store-notifications.test.ts
+  s_e715395fcc9d04::t_178a03bc6b5315 298
+CONTRIBUTING.md
+  s_e715395fcc9d04::t_83568be887e37c 27,30-32
+src/providers.ts
+  s_e715395fcc9d04::t_becfad0153eae8 1-22
+test/doctor.test.ts
+  s_e715395fcc9d04::t_cedc763ec418c0 2,4,7-19,23-24,29-34,39-41,46-74
+.claude-plugin/plugin.json
+  s_e715395fcc9d04::t_ba3c65ca697c8c 3-4,13
+.codex-plugin/plugin.json
+  s_e715395fcc9d04::t_74ab4912d9bb38 3-4,13
+.devin-plugin/plugin.json
+  s_e715395fcc9d04::t_27dadeac08b8a8 1-20
+README.md
+  s_e715395fcc9d04::t_544ecb5312f1c5 5,13,16,18,22,77-79,86,101,113
+devin-skills/connect/SKILL.md
+  s_e715395fcc9d04::t_988c848dde805f 1-16
+devin-skills/sessions/SKILL.md
+  s_e715395fcc9d04::t_82eac17a59743b 1-14
+devin.mcp.json
+  s_e715395fcc9d04::t_1a8c4c7fdff41d 1-13
+docs/architecture.md
+  s_e715395fcc9d04::t_714781de51ed5e 1,11,14,21,25-26,37-38,43,61-63,75
+docs/collaboration.md
+  s_e715395fcc9d04::t_d474f5b6eabbe9 3,9,15-17,73
+docs/getting-started.md
+  s_e715395fcc9d04::t_95013bce5698a5 5,11-12,14,26,68-88,119,129,134
+docs/support.md
+  s_e715395fcc9d04::t_d4848489accaf0 3,57,59,61,63-75,87-89,96,131
+hooks.json
+  s_e715395fcc9d04::t_3d4d578ac81d7b 1-38
+package-lock.json
+  s_e715395fcc9d04::t_0ea11f6f7edaf2 3,9
+package.json
+  s_e715395fcc9d04::t_54595df3b226d8 3,6
+skills/session-bridge/SKILL.md
+  s_e715395fcc9d04::t_74bf5b1cd9019f 3,12-14,17,21
+src/context-hook.ts
+  s_e715395fcc9d04::t_3b1ae4a1cb82cf 1-2,7-9,15,17,19-24,32-39
+test/context-hook.test.ts
+  s_e715395fcc9d04::t_bcf12a58f6b311 9,15,98-153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "822e61548c25052a178c61cb0c1da8aeb0886fd2",
+  "prompts": {},
+  "sessions": {
+    "s_e715395fcc9d04": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07056-03b8-77b1-864a-470e8dcece14",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Itamar Rocha Filho <itamardprf@gmail.com>"
+    }
+  }
+}
