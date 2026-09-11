@@ -4,15 +4,22 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { canonicalSessionId, isHost } from './providers.js';
 import type {
   Claim, ConnectedPeer, DeliveryResult, Host, InboxNotification, Message, NotificationRead, Pairing, Peer, ReceiverStatus, SendInput, StoreContract,
 } from './types.js';
 
 type Row = Record<string, unknown>;
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 const MAX_BODY_BYTES = 32 * 1024;
 const RECEIVER_LEASE_MS = 5_000;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export class StoreSchemaVersionError extends Error {
+  constructor(readonly version: number) {
+    super(`Unsupported store schema version: ${version}`);
+    this.name = 'StoreSchemaVersionError';
+  }
+}
 
 function text(value: unknown, field: string, limit: number): asserts value is string {
   if (typeof value !== 'string' || !value.trim() || value.includes('\0') || Buffer.byteLength(value) > limit) {
@@ -109,16 +116,24 @@ export class Store implements StoreContract {
   private readonly db: DatabaseSync;
   private readonly now: () => number;
 
-  constructor(home: string, now: () => number = Date.now) {
+  constructor(home: string, now: () => number = Date.now, options: {migrate?: boolean} = {}) {
     this.home = resolve(home);
     this.now = now;
     const file = secureHome(home);
     this.db = new DatabaseSync(file);
     try {
+      const initialVersion = Number(this.db.prepare('PRAGMA user_version').get()!.user_version);
+      if (initialVersion < 0 || initialVersion > SCHEMA_VERSION || (options.migrate === false && initialVersion !== SCHEMA_VERSION)) {
+        throw new StoreSchemaVersionError(initialVersion);
+      }
       this.db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;');
+      // Rebuilding a referenced table requires disabling enforcement before the migration transaction.
+      if (initialVersion < 5) this.db.exec('PRAGMA foreign_keys=OFF');
       this.transaction(() => {
         const version = Number(this.db.prepare('PRAGMA user_version').get()!.user_version);
-        if (version < 0 || version > SCHEMA_VERSION) throw new Error(`Unsupported store schema version: ${version}`);
+        if (version < 0 || version > SCHEMA_VERSION || (options.migrate === false && version !== SCHEMA_VERSION)) {
+          throw new StoreSchemaVersionError(version);
+        }
         if (version === 0) {
           this.db.exec(`
             CREATE TABLE peers (
@@ -178,14 +193,36 @@ export class Store implements StoreContract {
             );
           `);
         }
+        if (version < 5) {
+          const indexes = this.db.prepare("SELECT sql FROM sqlite_schema WHERE type='index' AND tbl_name='peers' AND sql IS NOT NULL").all();
+          this.db.exec(`
+            CREATE TABLE peers_upgrade (
+              id TEXT PRIMARY KEY, host TEXT NOT NULL CHECK (host IN ('codex','claude','devin')),
+              label TEXT NOT NULL, native_session_id TEXT, endpoint TEXT,
+              created_at INTEGER NOT NULL, closed_at INTEGER, ticket_hash TEXT UNIQUE, attached_at INTEGER,
+              status_text TEXT, status_updated_at INTEGER, receiver_owner TEXT,
+              receiver_checked_at INTEGER, receiver_expires_at INTEGER
+            );
+            INSERT INTO peers_upgrade(id,host,label,native_session_id,endpoint,created_at,closed_at,ticket_hash,
+              attached_at,status_text,status_updated_at,receiver_owner,receiver_checked_at,receiver_expires_at)
+              SELECT id,host,label,native_session_id,endpoint,created_at,closed_at,ticket_hash,
+                attached_at,status_text,status_updated_at,receiver_owner,receiver_checked_at,receiver_expires_at FROM peers;
+            DROP TABLE peers;
+            ALTER TABLE peers_upgrade RENAME TO peers;
+          `);
+          for (const index of indexes) this.db.exec(String(index.sql));
+          if (this.db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Store migration failed foreign key validation');
+        }
         this.db.exec(`
           CREATE INDEX IF NOT EXISTS peer_native_identity ON peers(native_session_id COLLATE NOCASE,host) WHERE closed_at IS NULL;
           CREATE INDEX IF NOT EXISTS peer_identity_history ON peers(host,native_session_id COLLATE NOCASE);
+          CREATE INDEX IF NOT EXISTS peer_identity_exact ON peers(host,native_session_id);
           CREATE INDEX IF NOT EXISTS message_history_from ON messages(from_peer,created_at DESC,id DESC);
           CREATE INDEX IF NOT EXISTS message_history_to ON messages(to_peer,created_at DESC,id DESC);
           PRAGMA user_version=${SCHEMA_VERSION};
         `);
       });
+      this.db.exec('PRAGMA foreign_keys=ON');
       for (const suffix of ['', '-wal', '-shm']) {
         if (existsSync(file + suffix)) privateFile(file + suffix);
       }
@@ -229,21 +266,21 @@ export class Store implements StoreContract {
   }
 
   private historicalPeer(nativeSessionId: string, host: Host): Peer | null {
-    const row = this.db.prepare(`SELECT * FROM peers WHERE host=? AND native_session_id=? COLLATE NOCASE
+    const row = this.db.prepare(`SELECT * FROM peers WHERE host=? AND native_session_id=? COLLATE ${host === 'devin' ? 'BINARY' : 'NOCASE'}
       ORDER BY created_at,id LIMIT 1`).get(host, nativeSessionId);
     return row ? peerRow(row) : null;
   }
 
   private identityIds(id: string): string[] {
     const peer = this.peer(id);
-    return this.db.prepare(`SELECT id FROM peers WHERE id=? OR (host=? AND native_session_id=? COLLATE NOCASE)`)
+    return this.db.prepare(`SELECT id FROM peers WHERE id=? OR (host=? AND native_session_id=? COLLATE ${peer.host === 'devin' ? 'BINARY' : 'NOCASE'})`)
       .all(id, peer.host, peer.nativeSessionId).map(row => String(row.id));
   }
 
   sameSession(a: string, b: string): boolean {
     const first = this.peer(a), second = this.peer(b);
-    return a === b || (first.nativeSessionId !== null && first.host === second.host
-      && first.nativeSessionId.toLowerCase() === second.nativeSessionId?.toLowerCase());
+    return a === b || (first.nativeSessionId !== null && second.nativeSessionId !== null && first.host === second.host
+      && canonicalSessionId(first.host, first.nativeSessionId) === canonicalSessionId(second.host, second.nativeSessionId));
   }
 
   private previousKey(self: string, key: string): Message | null {
@@ -261,29 +298,25 @@ export class Store implements StoreContract {
   }
 
   createPeer(input: {host: Host; label: string; nativeSessionId?: string; endpoint?: string}): {peer: Peer; ticket: string} {
-    if (input.host !== 'codex' && input.host !== 'claude') throw new Error('Host must be codex or claude');
+    if (!isHost(input.host)) throw new Error('Host must be codex, claude or devin');
     text(input.label, 'Label', 128);
-    if (input.host === 'codex' && (!input.nativeSessionId || !UUID.test(input.nativeSessionId))) {
-      throw new Error('Codex native session ID must be a UUID');
-    }
-    if (input.nativeSessionId !== undefined && !UUID.test(input.nativeSessionId)) {
-      throw new Error('Native session ID must be a UUID');
-    }
+    const nativeSessionId = input.nativeSessionId === undefined && input.host === 'claude'
+      ? undefined : canonicalSessionId(input.host, input.nativeSessionId);
     if (input.endpoint !== undefined) text(input.endpoint, 'Endpoint', 1024);
     const id = `sb_${randomUUID()}`;
     const ticket = `sbt_${randomBytes(32).toString('base64url')}`;
     const peer = this.transaction(() => {
-      if (input.nativeSessionId && this.findNativePeer(input.nativeSessionId, input.host)) {
+      if (nativeSessionId && this.findNativePeer(nativeSessionId, input.host)) {
         throw new Error('Native session already has an active peer; reuse it or close it before registering again');
       }
-      const previous = input.nativeSessionId && this.historicalPeer(input.nativeSessionId, input.host);
+      const previous = nativeSessionId && this.historicalPeer(nativeSessionId, input.host);
       if (previous) {
         this.db.prepare(`UPDATE peers SET closed_at=NULL,label=?,endpoint=?,attached_at=NULL,ticket_hash=? WHERE id=?`)
           .run(input.label, input.endpoint ?? null, hash(ticket), previous.id);
         return this.peer(previous.id);
       }
       this.db.prepare(`INSERT INTO peers(id,host,label,native_session_id,endpoint,created_at,ticket_hash)
-        VALUES(?,?,?,?,?,?,?)`).run(id, input.host, input.label, input.nativeSessionId?.toLowerCase() ?? null,
+        VALUES(?,?,?,?,?,?,?)`).run(id, input.host, input.label, nativeSessionId ?? null,
         input.endpoint ?? null, this.now(), hash(ticket));
       return this.peer(id);
     });
@@ -291,11 +324,17 @@ export class Store implements StoreContract {
   }
 
   ensureCodexPeer(input: {nativeSessionId: string; label?: string; attach?: boolean}): Peer {
-    const label = input.label ?? 'Codex';
+    return this.ensureNativePeer({...input, host: 'codex'});
+  }
+
+  ensureNativePeer(input: {host: 'codex' | 'devin'; nativeSessionId: string; label?: string; attach?: boolean}): Peer {
+    if (input.host !== 'codex' && input.host !== 'devin') throw new Error('Native attachment host must be codex or devin');
+    if (input.host === 'devin' && input.attach === false) throw new Error('Devin sessions must explicitly attach from their own native context');
+    const label = input.label ?? (input.host === 'codex' ? 'Codex' : 'Devin');
     text(label, 'Label', 128);
-    if (!UUID.test(input.nativeSessionId)) throw new Error('Codex native session ID must be a UUID');
+    const nativeSessionId = canonicalSessionId(input.host, input.nativeSessionId);
     return this.transaction(() => {
-      const previous = this.findNativePeer(input.nativeSessionId, 'codex');
+      const previous = this.findNativePeer(nativeSessionId, input.host);
       if (previous) {
         if (input.attach !== false && previous.attachedAt === null) {
           this.db.prepare('UPDATE peers SET attached_at=?,ticket_hash=NULL WHERE id=?').run(this.now(), previous.id);
@@ -303,7 +342,7 @@ export class Store implements StoreContract {
         }
         return previous;
       }
-      const historical = this.historicalPeer(input.nativeSessionId, 'codex');
+      const historical = this.historicalPeer(nativeSessionId, input.host);
       if (historical) {
         this.db.prepare('UPDATE peers SET closed_at=NULL,attached_at=?,ticket_hash=NULL WHERE id=?')
           .run(input.attach === false ? null : this.now(), historical.id);
@@ -312,27 +351,29 @@ export class Store implements StoreContract {
       const id = `sb_${randomUUID()}`;
       const now = this.now();
       this.db.prepare(`INSERT INTO peers(id,host,label,native_session_id,created_at,attached_at)
-        VALUES(?,'codex',?,?,?,?)`).run(id, label, input.nativeSessionId.toLowerCase(), now, input.attach === false ? null : now);
+        VALUES(?,?,?,?,?,?)`).run(id, input.host, label, nativeSessionId, now, input.attach === false ? null : now);
       return this.peer(id);
     });
   }
 
   findNativePeer(nativeSessionId: string, host?: Host): Peer | null {
-    if (!UUID.test(nativeSessionId)) throw new Error('Native session ID must be a UUID');
-    if (host !== undefined && host !== 'codex' && host !== 'claude') throw new Error('Host must be codex or claude');
+    const canonical = canonicalSessionId(host ?? 'devin', nativeSessionId);
     const rows = host === undefined
-      ? this.db.prepare('SELECT * FROM peers WHERE native_session_id=? COLLATE NOCASE AND closed_at IS NULL').all(nativeSessionId)
-      : this.db.prepare('SELECT * FROM peers WHERE native_session_id=? COLLATE NOCASE AND host=? AND closed_at IS NULL').all(nativeSessionId, host);
+      ? this.db.prepare(`SELECT * FROM peers WHERE closed_at IS NULL AND
+        ((host IN ('codex','claude') AND native_session_id=? COLLATE NOCASE) OR (host='devin' AND native_session_id=?))`)
+        .all(canonical, canonical)
+      : this.db.prepare(`SELECT * FROM peers WHERE native_session_id=? COLLATE ${host === 'devin' ? 'BINARY' : 'NOCASE'}
+        AND host=? AND closed_at IS NULL`).all(canonical, host);
     if (rows.length > 1) throw new Error('Native session ID is ambiguous; specify its provider or close duplicate registrations');
     return rows[0] ? peerRow(rows[0]) : null;
   }
 
   acquireReceiver(input: {nativeSessionId?: string; label: string}): {peer: Peer; ownerToken: string; ticket?: string} {
     text(input.label, 'Label', 128);
-    if (input.nativeSessionId !== undefined && !UUID.test(input.nativeSessionId)) throw new Error('Native session ID must be a UUID');
+    const nativeSessionId = input.nativeSessionId === undefined ? undefined : canonicalSessionId('claude', input.nativeSessionId);
     return this.transaction(() => {
-      let peer = input.nativeSessionId
-        ? this.findNativePeer(input.nativeSessionId, 'claude') ?? this.historicalPeer(input.nativeSessionId, 'claude')
+      let peer = nativeSessionId
+        ? this.findNativePeer(nativeSessionId, 'claude') ?? this.historicalPeer(nativeSessionId, 'claude')
         : null;
       const now = this.now();
       let ticket: string | undefined;
@@ -344,10 +385,10 @@ export class Store implements StoreContract {
         }
       } else {
         const id = `sb_${randomUUID()}`;
-        if (!input.nativeSessionId) ticket = `sbt_${randomBytes(32).toString('base64url')}`;
+        if (!nativeSessionId) ticket = `sbt_${randomBytes(32).toString('base64url')}`;
         this.db.prepare(`INSERT INTO peers(id,host,label,native_session_id,created_at,attached_at,ticket_hash)
-          VALUES(?,'claude',?,?,?,?,?)`).run(id, input.label, input.nativeSessionId?.toLowerCase() ?? null, now,
-          input.nativeSessionId ? now : null, ticket ? hash(ticket) : null);
+          VALUES(?,'claude',?,?,?,?,?)`).run(id, input.label, nativeSessionId ?? null, now,
+          nativeSessionId ? now : null, ticket ? hash(ticket) : null);
         peer = this.peer(id);
       }
       const ownerToken = `receiver_${randomBytes(32).toString('base64url')}`;
@@ -377,6 +418,7 @@ export class Store implements StoreContract {
   receiverStatus(peerId: string): ReceiverStatus {
     const row = this.db.prepare('SELECT * FROM peers WHERE id=?').get(peerId);
     if (!row) throw new Error('Unknown peer');
+    if (row.host === 'devin') return {state: 'unknown', checkedAt: null, expiresAt: null};
     if (row.closed_at === null && row.endpoint !== null) return {state: 'unknown', checkedAt: null, expiresAt: null};
     const checkedAt = row.receiver_checked_at as number | null;
     const expiresAt = row.receiver_expires_at as number | null;
@@ -431,7 +473,7 @@ export class Store implements StoreContract {
   }
 
   private notificationKey(peer: Peer): string | null {
-    return peer.nativeSessionId === null ? null : `${peer.host}:${peer.nativeSessionId.toLowerCase()}`;
+    return peer.nativeSessionId === null ? null : `${peer.host}:${canonicalSessionId(peer.host, peer.nativeSessionId)}`;
   }
 
   private reserveInboxNotification(to: string, includePreviouslyDispatched = false): InboxNotification | null {
@@ -456,7 +498,7 @@ export class Store implements StoreContract {
     const recipient = this.peer(String(row.to_peer));
     const peer = recipient.nativeSessionId && this.findNativePeer(recipient.nativeSessionId, recipient.host);
     if (!peer) return null;
-    if (peer.host === 'codex') return {owner: null, peer};
+    if (peer.host === 'codex' || peer.host === 'devin') return {owner: null, peer};
     if (!ownerToken) return null;
     const owner = hash(ownerToken);
     const lease = this.db.prepare(`SELECT id FROM peers WHERE id=? AND receiver_owner=?

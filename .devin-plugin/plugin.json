@@ -1,0 +1,20 @@
+{
+  "name": "session-bridge",
+  "version": "0.5.0",
+  "description": "Connect existing Codex, Claude Code and Devin CLI sessions by native ID.",
+  "author": {
+    "name": "Itamar Rocha"
+  },
+  "repository": "https://github.com/ItamarRocha/session-bridge",
+  "license": "MIT",
+  "skills": [
+    "devin-skills",
+    "skills"
+  ],
+  "mcpServers": {
+    "paths": [
+      "devin.mcp.json"
+    ],
+    "exclusive": true
+  }
+}

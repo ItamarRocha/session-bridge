@@ -1,7 +1,7 @@
 {
   "name": "session-bridge",
-  "version": "0.4.0",
-  "description": "Connect running Codex and Claude Code sessions by native ID, exchange messages, and inspect delivery.",
+  "version": "0.5.0",
+  "description": "Connect running Codex, Claude Code and Devin CLI sessions through supported local interfaces.",
   "author": {
     "name": "Itamar Rocha",
     "url": "https://github.com/ItamarRocha"
@@ -10,7 +10,7 @@
   "interface": {
     "displayName": "Session Bridge",
     "shortDescription": "Connect your running coding sessions.",
-    "longDescription": "Pair local Codex and Claude Code sessions, send bounded requests, and track replies with explicit receipts.",
+    "longDescription": "Pair local Codex, Claude Code and Devin CLI sessions, send bounded requests, and track replies with explicit receipts.",
     "developerName": "Itamar Rocha",
     "category": "Productivity",
     "capabilities": [

@@ -1,18 +1,20 @@
 # Collaborating across sessions
 
-Session Bridge lets existing Codex and Claude Code conversations exchange messages while keeping their own goals, plans and permissions. A session can work with several peers, including peers from the same provider.
+Session Bridge lets existing Codex, Claude Code and Devin CLI conversations exchange messages while keeping their own goals, plans and permissions. A session can work with several peers, including peers from the same provider.
 
 [Visual guide](collaboration.html) · [Method reference](methods.md) · [Validation](validation.md)
 
 ## Connect the conversations you need
 
-Address peers by native session ID, optionally prefixed `codex:` or `claude:`. An unregistered Codex task requires `codex:UUID`; the bridge does not guess the provider of an unknown bare UUID.
+Address peers by native session ID with `codex:`, `claude:` or `devin:` prefixes. Preserve Devin IDs exactly, including case. An unregistered Codex task requires `codex:UUID`; the bridge does not guess the provider of an unknown bare ID.
 
 Connect saves a relationship silently. The first message can notify the selected Codex task; its eligible read binds it without a reciprocal connect. The owning client controls queue consumption.
 
 Claude's `/session-bridge:connect` explicitly starts its persistent native Monitor receiver. Opening a terminal or listing peers leaves activation unchanged. Registered conversations can receive queued messages while their receiver is stopped; restarting it preserves identity, history and connections.
 
-Peers share a local bridge directory and OS account; UUIDs do not route between machines. Connecting A–B and A–C does not connect B–C.
+Devin's `/session-bridge:connect PEER_NATIVE_ID` activates and pairs the current conversation; it requires a selected peer. Its hooks collect inbox notices after tool completion or at the next prompt. An already-idle Devin needs a later prompt or explicit read, so factor that limit into a handoff. Opening a terminal or listing peers does not activate it.
+
+Peers share a local bridge directory and OS account; native IDs do not route between machines. Connecting A–B and A–C does not connect B–C.
 
 ## Six methods
 
@@ -68,7 +70,7 @@ A session list separates saved connections, receiver availability, self-status a
 | Field | Meaning |
 | --- | --- |
 | Connection | A saved relationship that permits messages. |
-| Receiver | Availability of the bridge helper, with observation/expiry times. Codex's unobserved native queue owner can be `unknown`. |
+| Receiver | Transport, availability and observation/expiry times. `idleWakeAvailable` is false for Devin; its hook receiver and Codex's unobserved queue owner report `unknown`. |
 | Status | The peer's last self-published “working on” line and its timestamp. |
 | Inbox | `unreadCount`, `pendingRequestCount` and notification state. Pending requests include already-read work awaiting a result. |
 

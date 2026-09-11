@@ -24,11 +24,12 @@ Use a separate `SESSION_BRIDGE_HOME` for tests and development. Stop older helpe
 | `src/bridge.ts`, `src/transport.ts` | Message dispatch and native Codex queue delivery. |
 | `src/monitor.ts` | Claude inbox watcher and receiver lifecycle. |
 | `src/cli.ts`, `src/mcp.ts` | CLI and MCP entry points. |
-| `src/context-hook.ts` | Fresh Claude identity for each MCP call. |
+| `src/context-hook.ts`, `src/inbox-hook.ts` | Fresh Claude/Devin call identity and Devin inbox delivery at lifecycle boundaries. |
 | `src/codex-environment.ts`, `src/doctor.ts`, `src/paths.ts` | Environment selection and diagnostics. |
 | `test/` | Store, adapter, facade, and process-level regression tests. |
-| `commands/`, `skills/`, `hooks/` | User commands, agent instructions, and Claude hook configuration. |
-| `.claude-plugin/`, `.codex-plugin/`, `claude.mcp.json` | Client packaging. |
+| `commands/`, `skills/`, `devin-skills/` | User commands and agent instructions. |
+| `claude-hooks.json`, `hooks.json` | Explicit Claude hooks and conventional Devin hooks, respectively. |
+| `.claude-plugin/`, `.codex-plugin/`, `.devin-plugin/`, `*.mcp.json` | Client packaging. |
 | `docs/` | Setup, reference, architecture, support, and validation. |
 
 ## Changes and tests

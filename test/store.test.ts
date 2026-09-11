@@ -101,7 +101,7 @@ test('native lookup is exact and read only, reports provider ambiguity, and pres
   const before = f.store.peers();
   assert.equal(f.store.findNativePeer('00000000-1111-2222-3333-444444444444'), null);
   assert.deepEqual(f.store.peers(), before);
-  assert.throws(() => f.store.findNativePeer(NATIVE_ID.slice(0, 8)), /UUID/);
+  assert.equal(f.store.findNativePeer(NATIVE_ID.slice(0, 8)), null);
   f.store.closePeer(claude.peer.id);
   assert.equal(f.store.findNativePeer(NATIVE_ID)!.id, f.a.id);
 });
@@ -246,7 +246,7 @@ test('schema two historical native aliases retain receipts and idempotency witho
   assert.equal(store.sameSession(sameUuidOtherProvider.id, b.id), false);
   assert.throws(() => store.message(sameUuidOtherProvider.id, request.id), /participant/);
   const version = new DatabaseSync(join(f.home, 'bridge.sqlite'));
-  assert.equal(version.prepare('PRAGMA user_version').get()!.user_version, 4);
+  assert.equal(version.prepare('PRAGMA user_version').get()!.user_version, 5);
   version.close();
   assert.equal(f.open().message(a.id, request.id).claimId, receipt.claimId);
 });

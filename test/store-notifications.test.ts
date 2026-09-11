@@ -295,7 +295,7 @@ test('schema three migration preserves receiver ownership receipts and uncertain
   const reopened = f.open();
   const migrated = new DatabaseSync(join(f.home, 'bridge.sqlite'));
   try {
-    assert.equal(migrated.prepare('PRAGMA user_version').get()!.user_version, 4);
+    assert.equal(migrated.prepare('PRAGMA user_version').get()!.user_version, 5);
   } finally {
     migrated.close();
   }

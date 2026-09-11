@@ -2,7 +2,7 @@
 
 [![Verify](https://github.com/ItamarRocha/session-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ItamarRocha/session-bridge/actions/workflows/ci.yml)
 
-**Connect your running Codex and Claude Code sessions.**
+**Connect your running Codex, Claude Code and Devin CLI sessions.**
 
 Ask Claude to review a commit while Codex keeps building. Delegate a benchmark to another session. Share a result without copying it between terminals. Each session keeps its own conversation, tools, and permissions.
 
@@ -10,15 +10,16 @@ Ask Claude to review a commit while Codex keeps building. Delegate a benchmark t
 flowchart LR
     Codex["Existing Codex task"] <--> Bridge["Session Bridge<br/>connections · messages · receipts"]
     Bridge <--> Claude["Existing Claude Code session"]
+    Bridge <--> Devin["Existing Devin CLI session"]
 ```
 
-Sessions connect by their native IDs. Each can talk to multiple peers, publish quiet “working on” status, and exchange meaningful requests and results. Incoming messages share one outstanding inbox notification per recipient and bridge directory. The bridge uses Codex's native queue and Claude's native Monitor; small local helpers carry messages between the existing model sessions.
+Sessions connect by their native IDs. Each can talk to multiple peers, publish quiet “working on” status, and exchange meaningful requests and results. Incoming messages share one outstanding inbox notification per recipient and bridge directory. The bridge uses Codex's native queue, Claude's native Monitor and Devin's lifecycle hooks. Devin receives notices after tool activity or at its next prompt; it cannot be woken while already idle. Small local helpers carry messages between the existing model sessions.
 
-**v0.4.0 · experimental · local macOS sessions under one OS account.** A native Claude → Codex → Claude roundtrip was verified on v0.3.0. Notification batching is new in v0.4.0 and needs its own native acceptance trial; see [validation](docs/validation.md).
+**v0.5.0 · experimental · local macOS sessions under one OS account.** Devin CLI joins the same six-method interface. Its native acceptance is pending, as is the v0.4 notification-batching trial. The confirmed native Claude → Codex → Claude roundtrip used v0.3.0; see [validation](docs/validation.md).
 
 ## Quick start
 
-You need **Node.js 24+**, npm, a Codex client with `codex queue`, and interactive Claude Code with the native `Monitor` tool. Availability depends on the client and configuration; see [requirements](docs/getting-started.md#requirements).
+You need **Node.js 24+**, npm and the supported interface for each participating client: Codex with `codex queue`, interactive Claude Code with native `Monitor`, or Devin CLI with plugin hooks. Availability depends on the client and configuration; see [requirements](docs/getting-started.md#requirements).
 
 ### 1. Build the bridge
 
@@ -73,14 +74,16 @@ The first message notifies that Codex task; reading it binds the connection. A r
 /session-bridge:sessions
 ```
 
-For the Codex-first flow, client resume, optional MCP setup, shared data directories, or profile routing, follow the [setup guide](docs/getting-started.md). Existing users should read the [v0.4 upgrade steps](docs/support.md#upgrading-to-v040) before opening an older ledger.
+For Devin, install the built checkout locally with `devin plugins install --local "$PWD"`, then use `/session-bridge:connect PEER_NATIVE_ID` in the intended conversation. A selected peer is required; opening a session or listing peers stays passive. See [Devin setup](docs/getting-started.md#load-the-plugin-in-devin-cli) for the hook and delivery requirements.
+
+For the Codex-first flow, client resume, optional MCP setup, shared data directories, or profile routing, follow the [setup guide](docs/getting-started.md). Existing users should read the [v0.5 upgrade steps](docs/support.md#upgrading-to-v050) before opening an older ledger.
 
 ## Six methods
 
 | Method | Purpose |
 | --- | --- |
 | `bridge_connect` | Connect to one selected native session ID. |
-| `bridge_sessions_list` | See connected peers, receiver availability, and reported work. |
+| `bridge_sessions_list` | See connected peers, receiver capability, inbox state, and reported work. |
 | `bridge_status_update` | Publish your own short “working on” line. |
 | `bridge_message_send` | Send a bounded request, informational update, or reply. |
 | `bridge_messages_read` | Read incoming messages or inspect an exchange. |
@@ -95,7 +98,7 @@ Message:       queued → read → replied
 Notification:  pending → submitting → submitted or unknown
 ```
 
-Several messages share one inbox wakeup. Sending returns `recipientInbox`; session listings expose `self.inbox` and each peer's `inbox`. They contain unread and pending-request counts plus notification state. A message can remain `queued` after the shared notification was submitted; only its read records receipt. Pending-request counts include requests already read but not answered.
+Several messages share one inbox wakeup. Sending returns `recipientInbox`; session listings expose `self.inbox` and each peer's `inbox`. They contain unread and pending-request counts plus notification state. A message can remain `queued` after the shared notification was submitted; only its read records receipt. Pending-request counts include requests already read but not answered. Receiver summaries also report `idleWakeAvailable`: it is `false` for Devin, whose hook delivery waits for a lifecycle boundary.
 
 A delivered notification carries an opaque token, which is deliberately absent from status responses. Reading with that token consumes one bounded page and permits another wakeup if unread messages remain. Ordinary polling does not consume it. Token replays report prior reads with `actionable: false`; inspect the original request through history or a targeted read before resuming unfinished work.
 
@@ -107,7 +110,7 @@ The bridge stores selected message text locally. Content may be processed by the
 
 | Guide | Read it for |
 | --- | --- |
-| [Getting started](docs/getting-started.md) | Installation, both connection directions, and configuration. |
+| [Getting started](docs/getting-started.md) | Installation, connection flows, and configuration. |
 | [Method reference](docs/methods.md) | The six tools, identity, message limits, and receipts. |
 | [Collaboration](docs/collaboration.md) | Delegation, handoffs, and review examples. |
 | [Architecture](docs/architecture.md) | The ledger, receiver lifecycle, and native adapters. |

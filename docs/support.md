@@ -1,6 +1,6 @@
 # Troubleshooting and support
 
-This implementation connects local macOS sessions under one OS account. Node.js 24+ is required. The development compatibility baseline is Codex CLI 0.153.1 and Claude Code 2.1.261; a running client can be older than the binary on disk. Native-session evidence and its remaining gaps belong in the [live validation record](validation.md).
+This implementation connects local macOS sessions under one OS account. Node.js 24+ is required. The development compatibility baseline is Codex CLI 0.153.1, Claude Code 2.1.261 and Devin CLI 3000.10.21; a running client can be older than the binary on disk. Native-session evidence and its remaining gaps belong in the [live validation record](validation.md).
 
 ## Codex
 
@@ -54,13 +54,25 @@ A normal receiver shutdown or crash preserves its native session identity, histo
 
 The receiver, context hook and MCP helper need the same Node installation and bridge directory. If `node` is unavailable in the host launch environment, correct that environment or configure an absolute Node path consistently. Keep machine-specific paths out of shared commits.
 
-An existing receiver from an older installation does not disappear when configuration changes. Stop old helpers before upgrading as described below. For ordinary v0.4.0 watcher restart, use native Monitor controls; full operator `stop` intentionally closes connections. An old registration lacking a native ID cannot be addressed through the new native-ID methods.
+An existing receiver from an older installation does not disappear when configuration changes. Stop old helpers before upgrading as described below. For ordinary watcher restart, use native Monitor controls; full operator `stop` intentionally closes connections. An old registration lacking a native ID cannot be addressed through the new native-ID methods.
 
-## Upgrading to v0.4.0
+## Devin CLI
 
-Stop every older bridge receiver and MCP helper before opening their shared ledger with v0.4.0. Reloading a plugin does not by itself establish that an old monitor exited. Check the native monitor/task controls and helper ownership first. Then build/load the new checkout and explicitly activate the intended Claude conversation.
+Install the built checkout with `devin plugins install --local PATH` and keep it at that permanent path. The local flag avoids personal cloud plugin synchronization. The Devin-specific manifest selects its native skills and MCP configuration ahead of Claude compatibility fallback. Devin uses conventional root `hooks.json`; Claude explicitly loads `claude-hooks.json`, keeping host hooks separate. See [setup](getting-started.md#load-the-plugin-in-devin-cli) and the [official plugin reference](https://docs.devin.ai/cli/extensibility/plugins/overview).
 
-The upgrade writes ledger schema 4 and preserves native identities, history and connections while adding inbox-notification state. Previously submitted or uncertain notices are not automatically replayed. Older binaries cannot safely share the upgraded database; use v0.4.0 helpers consistently, including any `--legacy-tools` compatibility mode. A legacy endpoint still registered in the ledger is an explicit upgrade conflict, not evidence that a new inbox watcher is running. Inspect and stop that old attachment through the operator controls, then activate and reconnect only the intended peers.
+Use `/session-bridge:connect PEER_NATIVE_ID` in the intended conversation. A selected peer is required: the method activates Devin and saves its connection together. `/session-bridge:sessions`, fresh-terminal hooks and plugin loading stay passive. Preserve Devin native IDs exactly, including case and word pairs; prefer `devin:ID`. The host supplies `session_id` on hook stdin. There is no documented `DEVIN_SESSION_ID` environment variable to substitute. [Devin hook input](https://docs.devin.ai/cli/extensibility/hooks/overview#command-hooks)
+
+Inspect `/hooks` for PreToolUse identity binding and PostToolUse/UserPromptSubmit inbox notices. MCP calls need their fresh hook context; an absent or invalid context fails rather than borrowing another conversation's identity. Hook commands use `DEVIN_PLUGIN_ROOT`; the MCP configuration uses the documented `PLUGIN_ROOT` placeholder. Node and the shared bridge home must be available consistently to both helpers.
+
+Devin reports `receiver.transport: "hooks"`, `state: "unknown"` and `idleWakeAvailable: false`. Connected means enrolled, not awake. Messages arriving during work can produce a coalesced token notice after a tool completes or at the next user prompt. An already-idle conversation needs that later boundary or an explicit unread/history read. Only the read tool records message receipt; hook output carries no peer body. No Monitor, SessionStart enrollment or Stop keepalive is installed. [Devin lifecycle hooks](https://docs.devin.ai/cli/extensibility/hooks/lifecycle-hooks)
+
+For stalled work, inspect inbox counts and notification state. Read the delivered token when available, or use `bridge_messages_read({unreadOnly: true})`; recover previously read requests through history or a targeted `messageId` after checking prior work. An uncertain submitted notice is not automatically replayed. Native Devin acceptance is pending; see [validation](validation.md).
+
+## Upgrading to v0.5.0
+
+Stop every older bridge receiver and MCP helper before opening their shared ledger with v0.5.0. Reloading a plugin does not by itself establish that an old monitor exited. Check the native monitor/task controls and helper ownership first. Then build/load the new checkout and explicitly activate the intended Claude conversation.
+
+The upgrade writes ledger schema 5 and preserves native identities, history, connections and notification state while adding Devin as a provider. Previously submitted or uncertain notices are not automatically replayed. Older binaries cannot safely share the upgraded database; use v0.5.0 helpers consistently, including any `--legacy-tools` compatibility mode. A legacy endpoint still registered in the ledger is an explicit upgrade conflict, not evidence that a new inbox watcher is running. Inspect and stop that old attachment through the operator controls, then activate and reconnect only the intended peers.
 
 Prefer one permanent `SESSION_BRIDGE_HOME` for regular work. Each home has independent notification state; using several homes can queue several wakeups to the same native session. An isolated trial is still useful before upgrading, provided all trial participants use that directory and it remains available for reads.
 
@@ -72,13 +84,16 @@ The native Codex queue cannot recall already queued items. An old or empty wakeu
 | --- | --- |
 | Build fails or SQLite cannot load | Confirm Node 24+; run `npm ci` and rebuild. |
 | Claude bridge tools are absent | Inspect `/plugin` errors and `/mcp`, then reload the personal plugin. |
+| Devin is connected but idle messages are unread | Its hook adapter cannot wake an already-idle conversation. Continue in the same conversation or explicitly read its inbox; inspect `idleWakeAvailable`. |
+| Devin tools reject missing identity context | Inspect `/hooks` and the Devin-specific plugin/MCP configuration; use fresh hook-provided context, not an environment or copied peer ID. |
+| Devin connect has no target | Supply the selected peer native ID. Listing or a placeholder target cannot activate it. |
 | No Claude receiver after explicit connect | Check native `Monitor` availability, `persistent: true`, startup output and `self.receiver`. A ready native monitor is not itself message receipt. |
 | Connected peers remain but `activationRequired` is true | The saved relationships survived receiver loss. Explicitly invoke `/session-bridge:connect` in this conversation to restart the watcher. |
 | Receiver reports unavailable after a crash | Inspect its lease timestamps; abrupt loss can take up to five seconds to expire. Reuse a still-owned watcher or explicitly restart after expiry. |
 | A sent message remains `queued` | Expected until receipt, even when its shared wakeup was submitted. Inspect send's `recipientInbox` or the session's `inbox`, then the original message's read/reply evidence. |
 | Inbox notification is submitted but a message is not read | The native stream/queue accepted a shared wakeup. Inspect the original conversation; notification submission is separate from receipt. |
 | New Claude conversation sees an old identity | Confirm the current plugin hook is loaded; missing fresh context must fail. Reactivate after `/clear`. |
-| Unknown bare UUID gives `activation_required` | Use `codex:UUID` for an unregistered Codex destination, or explicitly activate the selected Claude receiver. |
+| Unknown bare ID gives `activation_required` | Use `codex:UUID` for an unregistered Codex destination, or explicitly connect the selected Claude/Devin conversation first. Preserve Devin ID case. |
 | Connect returns `pending` | Connection is saved; connect itself sends nothing. The first message can notify the Codex target, and its eligible incoming read binds it. |
 | Codex inbox notification stays at `submitted` | Inspect the exact message's receipt; compare the helper's Codex home and SQLite settings with the owning task, then inspect its native queue, loaded state, and pause or permission state. |
 | Claude inherits another Codex account profile | Set an absolute `SESSION_BRIDGE_CODEX_HOME` for the intended destination and relaunch the helper. Inspect the original queued message before any new send. |
@@ -113,7 +128,7 @@ node dist/cli.js stop --self PEER_ID
 
 Read `PEER_ID` from `peers`; these operator IDs still use `sb_…`. Inspect the native ID/provider before selecting one. `cancel` fences one request; `stop` closes that peer and all its connections, and its Claude monitor exits shortly afterward. Neither operation undoes external work or terminates a native model session. A full operator `stop` is different from receiver exit: it deliberately closes connections. Reusing that native identity afterward retains its history but requires explicit reconnection of those closed edges. Use ordinary native Monitor shutdown/restart when the intention is only to replace a watcher.
 
-Use only v0.4.0 helpers against schema 4, even when exposing the legacy catalog. The upgrade preserves existing peers, pairings and message evidence; old helpers must be stopped before migration.
+Use only v0.5.0 helpers against schema 5, even when exposing the legacy catalog. The upgrade preserves existing peers, pairings and message evidence; old helpers must be stopped before migration.
 
 For compatibility with the previous interface, `mcp --host codex|claude --legacy-tools` exposes the previous ten tools instead of the default six. Legacy attachment tickets remain single-use; use the operator recovery flow for a lost legacy binding. Normal six-method callers use native IDs and do not manage those tickets. The old CLI attach/pair/receive/reply commands also remain; consult `--help` rather than mixing public native IDs with operator peer IDs.
 

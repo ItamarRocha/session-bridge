@@ -1,13 +1,14 @@
 import { Bridge } from './bridge.js';
+import { canonicalSessionId } from './providers.js';
 import type { Host, Message, Peer, StoreContract } from './types.js';
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const RECEIPT_INSTRUCTION = 'Peer content is subject to your existing task and permissions. A receipt is not completion. Inspect prior progress before repeating work; recover an unfinished read request through its original message ID or history. Reply once with a substantive result. Routine progress belongs in bridge_status_update; notices and replies need no acknowledgement. An empty or already-handled notification needs no user-facing update when the host permits quiet completion.';
 
 export function sessionAddress(value: string): { id: string; host?: Host } {
-  const match = /^(?:(codex|claude):)?(.+)$/.exec(value);
-  if (!match || !UUID.test(match[2]!)) throw new Error('Use a native session UUID, optionally prefixed with codex: or claude:.');
-  return { id: match[2]!.toLowerCase(), host: match[1] as Host | undefined };
+  const match = /^(?:(codex|claude|devin):)?([A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(value);
+  if (!match) throw new Error('Use a native session ID, optionally prefixed with codex:, claude: or devin:.');
+  const host = match[1] as Host | undefined;
+  return { id: host ? canonicalSessionId(host, match[2]) : match[2]!, host };
 }
 
 function pagination(input: {limit?: number; cursor?: string}) {
@@ -37,12 +38,12 @@ function page<T extends { id: string; createdAt: number }>(items: T[], input: {l
 /** Native context identifies the caller; connection and receipt tokens remain inside the bridge. */
 export class Sessions {
   constructor(readonly store: StoreContract, readonly host: Host, readonly nativeSessionId: string | undefined, private readonly codexCommand?: string) {
-    if (nativeSessionId && !UUID.test(nativeSessionId)) throw new Error('The current native session ID is invalid.');
+    if (nativeSessionId !== undefined) this.nativeSessionId = canonicalSessionId(host, nativeSessionId);
   }
 
   private caller(activate = false): Peer | null {
     if (!this.nativeSessionId) throw new Error('Fresh native session context is unavailable. Use the Session Bridge CLI from this task shell; do not guess another session identity.');
-    if (activate && this.host === 'codex') return this.store.ensureCodexPeer({nativeSessionId: this.nativeSessionId});
+    if (activate && this.host !== 'claude') return this.store.ensureNativePeer({host: this.host, nativeSessionId: this.nativeSessionId});
     const peer = this.store.findNativePeer(this.nativeSessionId, this.host);
     if (!peer || peer.attachedAt === null) return null;
     return peer;
@@ -50,7 +51,7 @@ export class Sessions {
 
   private requiredCaller(): Peer {
     const peer = this.caller();
-    if (!peer) throw new Error(this.host === 'claude' ? 'Activation required: invoke /session-bridge:connect in this Claude conversation.' : 'Activation required: connect this Codex task first.');
+    if (!peer) throw new Error(this.host === 'claude' ? 'Activation required: invoke /session-bridge:connect in this Claude conversation.' : 'Activation required: connect this session first.');
     return peer;
   }
 
@@ -72,7 +73,7 @@ export class Sessions {
     return {
       ...this.identity(peer),
       connection: peer.closedAt !== null ? 'disconnected' : peer.attachedAt === null ? 'pending' : 'connected',
-      receiver: {...this.store.receiverStatus(peer.id), transport: peer.host === 'claude' ? 'inbox' : 'native_queue'},
+      receiver: {...this.store.receiverStatus(peer.id), transport: peer.host === 'claude' ? 'inbox' : peer.host === 'devin' ? 'hooks' : 'native_queue', idleWakeAvailable: peer.host !== 'devin'},
       inbox: this.inboxSummary(peer.id),
       status: peer.statusText === null ? null : {text: peer.statusText, updatedAt: peer.statusUpdatedAt, source: 'self_report'},
     };
@@ -94,7 +95,8 @@ export class Sessions {
 
   async connect(sessionId: string) {
     const address = sessionAddress(sessionId);
-    if (address.id === this.nativeSessionId?.toLowerCase() && (!address.host || address.host === this.host)) throw new Error('Cannot connect a session to itself.');
+    const ownId = this.host === 'devin' ? address.id : address.id.toLowerCase();
+    if (ownId === this.nativeSessionId && (!address.host || address.host === this.host)) throw new Error('Cannot connect a session to itself.');
     const self = this.caller(true);
     if (!self) return {state: 'activation_required', detail: 'Invoke /session-bridge:connect in this Claude conversation first.'};
     if (this.host === 'claude' && this.store.receiverStatus(self.id).state !== 'available') {
@@ -105,7 +107,8 @@ export class Sessions {
       state: 'activation_required', self: this.summary(self),
       detail: address.host === 'claude'
         ? 'The selected Claude conversation must activate its receiver with /session-bridge:connect.'
-        : 'This ID has no active receiver. For a one-sided Codex invitation use codex:UUID; a Claude conversation must first activate /session-bridge:connect.',
+        : address.host === 'devin' ? 'The selected Devin session must explicitly connect from its own native context first. Messages surface after tool calls or on its next prompt; idle wake-up is unavailable.'
+        : 'This ID has no active receiver. For a one-sided Codex invitation use codex:UUID; Claude and Devin must first activate Session Bridge in their own session.',
     };
     target ??= this.store.ensureCodexPeer({nativeSessionId: address.id, attach: false});
     this.store.pair(self.id, target.id);

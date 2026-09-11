@@ -1,6 +1,6 @@
 # Validation
 
-The v0.3.0 baseline has automated protocol/process coverage and a confirmed native Claude → Codex → Claude exchange. v0.4.0 adds inbox notification batching; its native acceptance is separate from that earlier result. These establish different layers of behavior: storing or submitting a message alone does not prove the destination agent read it.
+The v0.3.0 baseline has automated protocol/process coverage and a confirmed native Claude → Codex → Claude exchange. v0.4.0 adds inbox notification batching and v0.5.0 adds Devin CLI; their native acceptance is separate from that earlier result. These establish different layers of behavior: storing or submitting a message alone does not prove the destination agent read it.
 
 ## Tested baseline
 
@@ -17,6 +17,14 @@ Run the local gate with:
 ```bash
 npm run verify
 ```
+
+## v0.5.0 Devin acceptance
+
+The automated gate passes **145 tests**, recorded 11 September 2026. Added coverage includes real stdio MCP/CLI helpers across three providers, fresh per-call Devin identity, explicit activation, passive schema preservation, migration rollback, token batching/replay, and bounded shutdown with an unread output pipe. `claude plugin validate .` passes with the explicitly selected Claude hook file. Independent delivery and existing-client compatibility reviews found no remaining concrete defects after the passive migration and stalled-output fixes.
+
+The Devin adapter targets CLI **3000.10.21** and uses its documented plugin, MCP and lifecycle-hook interfaces. Native delivery acceptance has not been recorded. The [Devin research](devin-cli-research.md) lists the primary sources and required native checks.
+
+Before claiming native support, verify separate current identities in two existing Devin conversations, fresh-terminal dormancy, explicit connection, all six methods, coalesced notices during work, and a substantive cross-provider result. An already-idle Devin should retain unread work until a lifecycle boundary or explicit read; `idleWakeAvailable: false` must remain visible. Hook emission alone cannot prove message receipt. An isolated native plugin-loader check stopped before installation because Devin required authentication. Hook loading remains unverified; no model session or installed user plugin was changed.
 
 ## v0.4.0 notification acceptance
 
